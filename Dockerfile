@@ -8,14 +8,12 @@ RUN npm run build
 FROM python:3.12-slim
 WORKDIR /app
 
-# System deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Python deps
+# Python deps first (cached layer)
 COPY api/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Playwright + Chromium (separate layer — only re-runs when playwright version changes)
+RUN playwright install chromium --with-deps
 
 # Copy backend
 COPY api/ ./

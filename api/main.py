@@ -16,6 +16,7 @@ load_dotenv()
 
 from analyzer import analyze_notes
 from xhs_client import scrape_keyword
+from login_manager import xhs_qr_login
 
 app = FastAPI(title="RedLens", version="1.0.0")
 
@@ -35,6 +36,15 @@ class AnalyzeRequest(BaseModel):
 
 class ValidateCookieRequest(BaseModel):
     cookie: str
+
+
+@app.get("/api/login/qr")
+async def login_qr():
+    """SSE stream: start XHS QR login session. Events: status, qr, authenticated, error."""
+    async def gen():
+        async for event in xhs_qr_login():
+            yield event
+    return EventSourceResponse(gen())
 
 
 @app.get("/api/health")

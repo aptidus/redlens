@@ -1,9 +1,30 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 
+const COOKIE_KEY = 'redlens_xhs_cookie'
+const USERNAME_KEY = 'redlens_xhs_username'
+
+function loadStoredCookie(): { cookie: string; username: string } {
+  return {
+    cookie: localStorage.getItem(COOKIE_KEY) ?? '',
+    username: localStorage.getItem(USERNAME_KEY) ?? '',
+  }
+}
+
+function storeCookie(cookie: string, username: string) {
+  localStorage.setItem(COOKIE_KEY, cookie)
+  localStorage.setItem(USERNAME_KEY, username)
+}
+
+function clearCookie() {
+  localStorage.removeItem(COOKIE_KEY)
+  localStorage.removeItem(USERNAME_KEY)
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type AppState = 'setup' | 'loading' | 'report' | 'error'
 type LoadStage = 'crawling' | 'analyzing'
+type QRState = 'idle' | 'connecting' | 'showing' | 'done' | 'error'
 
 interface MetricsSummary {
   total_posts_analyzed: number
@@ -103,6 +124,119 @@ function LensLogo({ size = 40, spinning = false }: { size?: number; spinning?: b
   )
 }
 
+// ─── QR Modal ─────────────────────────────────────────────────────────────────
+
+function QRModal({
+  onAuthenticated,
+  onClose,
+}: {
+  onAuthenticated: (cookie: string, username: string) => void
+  onClose: () => void
+}) {
+  const [qrState, setQrState] = useState<QRState>('connecting')
+  const [qrImage, setQrImage] = useState('')
+  const [statusMsg, setStatusMsg] = useState('Connecting to 小红书…')
+  const qrStateRef = useRef<QRState>('connecting')
+
+  useEffect(() => {
+    qrStateRef.current = qrState
+  }, [qrState])
+
+  useEffect(() => {
+    const es = new EventSource('/api/login/qr')
+
+    es.addEventListener('status', (e: MessageEvent) => {
+      const data = JSON.parse(e.data)
+      setStatusMsg(data.message)
+    })
+
+    es.addEventListener('qr', (e: MessageEvent) => {
+      const data = JSON.parse(e.data)
+      setQrImage(data.image)
+      setQrState('showing')
+    })
+
+    es.addEventListener('authenticated', (e: MessageEvent) => {
+      const data = JSON.parse(e.data)
+      setQrState('done')
+      setStatusMsg('Connected!')
+      es.close()
+      setTimeout(() => onAuthenticated(data.cookie, data.username || ''), 700)
+    })
+
+    es.addEventListener('error', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data)
+        setStatusMsg(data.message || 'Login failed.')
+      } catch {
+        setStatusMsg('Connection error.')
+      }
+      setQrState('error')
+      es.close()
+    })
+
+    es.onerror = () => {
+      const s = qrStateRef.current
+      if (s !== 'done' && s !== 'error') {
+        setStatusMsg('Connection lost.')
+        setQrState('error')
+      }
+      es.close()
+    }
+
+    return () => { es.close() }
+  }, [])
+
+  return (
+    <div
+      style={styles.qrOverlay}
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+    >
+      <div style={styles.qrModal}>
+        <button style={styles.qrClose} onClick={onClose} aria-label="Close">✕</button>
+
+        <div style={styles.qrHeader}>
+          <LensLogo size={28} />
+          <h3 style={styles.qrTitle}>Connect 小红书</h3>
+        </div>
+
+        {qrState === 'connecting' && (
+          <div style={styles.qrSpinner}>
+            <LensLogo size={44} spinning />
+            <p style={styles.qrStatusMsg}>{statusMsg}</p>
+          </div>
+        )}
+
+        {qrState === 'showing' && (
+          <div style={styles.qrBody}>
+            <div style={styles.qrImageWrap}>
+              <img src={qrImage} alt="小红书 QR Code" style={styles.qrImage} />
+            </div>
+            <p style={styles.qrStatusMsg}>{statusMsg}</p>
+            <p style={styles.qrHint}>Open 小红书 app → tap profile → Scan QR</p>
+          </div>
+        )}
+
+        {qrState === 'done' && (
+          <div style={styles.qrSuccess}>
+            <div style={styles.qrSuccessIcon}>✓</div>
+            <p style={styles.qrSuccessText}>Connected successfully!</p>
+          </div>
+        )}
+
+        {qrState === 'error' && (
+          <div style={styles.qrBody}>
+            <p style={styles.qrErrorMsg}>{statusMsg}</p>
+            <button style={styles.qrRetryBtn} onClick={onClose}>
+              Close &amp; try again
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Setup Screen ─────────────────────────────────────────────────────────────
 
 function SetupScreen({
@@ -111,15 +245,27 @@ function SetupScreen({
   onAnalyze: (keyword: string, cookie: string, maxNotes: number) => void
 }) {
   const [keyword, setKeyword] = useState('')
-  const [cookie, setCookie] = useState('')
   const [maxNotes, setMaxNotes] = useState(15)
-  const [cookieOpen, setCookieOpen] = useState(false)
-  const [showCookieHelp, setShowCookieHelp] = useState(false)
+  const [session, setSession] = useState(() => loadStoredCookie())
+  const [showQR, setShowQR] = useState(false)
 
-  const canSubmit = keyword.trim().length > 0 && cookie.trim().length > 0
+  const canSubmit = keyword.trim().length > 0 && session.cookie.trim().length > 0
+
+  const handleAuthenticated = useCallback((cookie: string, username: string) => {
+    storeCookie(cookie, username)
+    setSession({ cookie, username })
+    setShowQR(false)
+  }, [])
 
   return (
     <div style={styles.setupWrap}>
+      {showQR && (
+        <QRModal
+          onAuthenticated={handleAuthenticated}
+          onClose={() => setShowQR(false)}
+        />
+      )}
+
       {/* Background accent */}
       <div style={styles.setupGlow} />
 
@@ -155,59 +301,49 @@ function SetupScreen({
             placeholder="e.g. 减肥, 护肤, 穿搭, 旅游"
             value={keyword}
             onChange={e => setKeyword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && canSubmit && onAnalyze(keyword, cookie, maxNotes)}
+            onKeyDown={e => e.key === 'Enter' && canSubmit && onAnalyze(keyword, session.cookie, maxNotes)}
             autoFocus
           />
         </div>
 
-        {/* Cookie accordion */}
+        {/* XHS Account */}
         <div style={styles.fieldGroup}>
-          <button
-            style={styles.accordionTrigger}
-            onClick={() => setCookieOpen(o => !o)}
-          >
-            <span style={styles.label}>
-              XHS COOKIE
-              {cookie && <span style={styles.cookieBadge}>✓ Set</span>}
-            </span>
-            <svg
-              width="16" height="16" viewBox="0 0 16 16" fill="none"
-              style={{ transform: cookieOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', flexShrink: 0 }}
-            >
-              <path d="M4 6l4 4 4-4" stroke="var(--text-3)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
-
-          {cookieOpen && (
-            <div style={{ animation: 'fade-up 0.2s ease' }}>
-              <div style={styles.cookieHelp}>
-                <span>Paste your xiaohongshu.com cookie string here.</span>
-                <button
-                  style={styles.helpBtn}
-                  onClick={() => setShowCookieHelp(h => !h)}
-                >
-                  How to get it?
-                </button>
+          <label style={styles.label}>XHS ACCOUNT</label>
+          {session.cookie ? (
+            <div style={styles.sessionRow}>
+              <div style={styles.sessionBadge}>
+                <span style={styles.sessionDot} />
+                <span style={styles.sessionName}>
+                  {session.username || 'Connected'}
+                </span>
               </div>
-
-              {showCookieHelp && (
-                <div style={styles.cookieHelpBox}>
-                  <p style={styles.helpStep}><strong>1.</strong> Open <code style={styles.code}>xiaohongshu.com</code> and log in</p>
-                  <p style={styles.helpStep}><strong>2.</strong> Press <code style={styles.code}>F12</code> → Application → Cookies → xiaohongshu.com</p>
-                  <p style={styles.helpStep}><strong>3.</strong> Or: Network tab → any request → copy the <code style={styles.code}>Cookie</code> header value</p>
-                  <p style={styles.helpStep}><strong>4.</strong> Paste the full string below</p>
-                </div>
-              )}
-
-              <textarea
-                style={styles.cookieInput}
-                placeholder="a1=...; webId=...; xsecappid=...; ..."
-                value={cookie}
-                onChange={e => setCookie(e.target.value)}
-                rows={4}
-                spellCheck={false}
-              />
+              <button
+                style={styles.switchBtn}
+                onClick={() => {
+                  clearCookie()
+                  setSession({ cookie: '', username: '' })
+                }}
+              >
+                Switch account
+              </button>
             </div>
+          ) : (
+            <button style={styles.qrLoginBtn} onClick={() => setShowQR(true)}>
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                <rect x="2" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                <rect x="11" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                <rect x="2" y="11" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                <rect x="4" y="4" width="3" height="3" fill="currentColor" />
+                <rect x="13" y="4" width="3" height="3" fill="currentColor" />
+                <rect x="4" y="13" width="3" height="3" fill="currentColor" />
+                <rect x="11" y="11" width="2" height="2" fill="currentColor" />
+                <rect x="15" y="11" width="2" height="2" fill="currentColor" />
+                <rect x="13" y="13" width="2" height="2" fill="currentColor" />
+                <rect x="11" y="15" width="2" height="2" fill="currentColor" />
+                <rect x="15" y="15" width="2" height="2" fill="currentColor" />
+              </svg>
+              Scan QR to connect 小红书
+            </button>
           )}
         </div>
 
@@ -238,16 +374,15 @@ function SetupScreen({
             ...(canSubmit ? {} : styles.analyzeBtnDisabled),
           }}
           disabled={!canSubmit}
-          onClick={() => onAnalyze(keyword, cookie, maxNotes)}
+          onClick={() => onAnalyze(keyword, session.cookie, maxNotes)}
         >
           <LensLogo size={20} />
           <span>Analyze "{keyword || '…'}"</span>
         </button>
 
-        {!cookie && !cookieOpen && (
+        {!session.cookie && (
           <p style={styles.cookieHint}>
-            ↑ You'll need to set your XHS cookie to crawl content.{' '}
-            <button style={styles.inlineBtn} onClick={() => setCookieOpen(true)}>Set cookie →</button>
+            ↑ Connect your 小红书 account to start analyzing.
           </p>
         )}
       </div>
@@ -661,7 +796,6 @@ export default function App() {
     })
 
     es.onerror = () => {
-      // Only trigger if not already handled above
       if (appState === 'loading') {
         setError('Connection lost. Please try again.')
         setAppState('error')
@@ -829,80 +963,197 @@ const styles: Record<string, React.CSSProperties> = {
     transition: 'border-color 0.2s',
     width: '100%',
   },
-  accordionTrigger: {
+
+  // Session / QR login
+  sessionRow: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    cursor: 'pointer',
-    background: 'none',
-    border: 'none',
-    width: '100%',
-    padding: '0',
-  },
-  cookieBadge: {
-    background: 'rgba(62, 207, 142, 0.15)',
-    color: 'var(--green)',
-    padding: '2px 8px',
-    borderRadius: '4px',
-    fontSize: '10px',
-    fontWeight: 600,
-  },
-  cookieHelp: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    fontSize: '13px',
-    color: 'var(--text-2)',
-    marginBottom: '8px',
-    flexWrap: 'wrap',
-  },
-  helpBtn: {
-    color: 'var(--red)',
-    fontSize: '13px',
-    textDecoration: 'underline',
-    cursor: 'pointer',
-    background: 'none',
-    border: 'none',
-    padding: 0,
-    fontFamily: 'var(--font-ui)',
-  },
-  cookieHelpBox: {
-    background: 'var(--bg-3)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-sm)',
-    padding: '16px',
-    marginBottom: '10px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-  },
-  helpStep: {
-    fontSize: '13px',
-    color: 'var(--text-2)',
-    lineHeight: 1.5,
-  },
-  code: {
-    background: 'var(--bg)',
-    border: '1px solid var(--border)',
-    borderRadius: '3px',
-    padding: '1px 5px',
-    fontFamily: 'var(--font-mono)',
-    fontSize: '12px',
-    color: 'var(--gold)',
-  },
-  cookieInput: {
     background: 'var(--bg-2)',
     border: '1px solid var(--border)',
     borderRadius: 'var(--radius-sm)',
-    padding: '14px 16px',
-    color: 'var(--text-2)',
-    fontSize: '12px',
+    padding: '12px 16px',
+  },
+  sessionBadge: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  sessionDot: {
+    display: 'block',
+    width: '8px',
+    height: '8px',
+    borderRadius: '50%',
+    background: 'var(--green)',
+    flexShrink: 0,
+    boxShadow: '0 0 6px rgba(62,207,142,0.6)',
+  },
+  sessionName: {
+    fontSize: '14px',
+    color: 'var(--text)',
+    fontWeight: 500,
+  },
+  switchBtn: {
     fontFamily: 'var(--font-mono)',
-    outline: 'none',
-    resize: 'vertical',
+    fontSize: '11px',
+    letterSpacing: '0.06em',
+    color: 'var(--text-3)',
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    textDecoration: 'underline',
+    padding: 0,
+  },
+  qrLoginBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    background: 'var(--bg-2)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--text)',
+    padding: '14px 16px',
+    fontSize: '15px',
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'border-color 0.2s, background 0.2s',
+    fontFamily: 'var(--font-ui)',
     width: '100%',
+    justifyContent: 'center',
+  },
+
+  // QR Modal
+  qrOverlay: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,0.7)',
+    backdropFilter: 'blur(8px)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 999,
+    padding: '24px',
+    animation: 'fade-up 0.2s ease',
+  },
+  qrModal: {
+    position: 'relative',
+    background: 'var(--bg-1)',
+    border: '1px solid var(--border)',
+    borderRadius: '20px',
+    padding: '32px',
+    width: '100%',
+    maxWidth: '360px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '24px',
+    boxShadow: '0 24px 80px rgba(0,0,0,0.5)',
+  },
+  qrClose: {
+    position: 'absolute',
+    top: '16px',
+    right: '16px',
+    background: 'var(--bg-2)',
+    border: '1px solid var(--border)',
+    borderRadius: '6px',
+    color: 'var(--text-3)',
+    cursor: 'pointer',
+    padding: '4px 8px',
+    fontSize: '13px',
+    lineHeight: 1,
+    fontFamily: 'var(--font-mono)',
+  },
+  qrHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  qrTitle: {
+    fontFamily: 'var(--font-display)',
+    fontSize: '20px',
+    fontWeight: 700,
+    letterSpacing: '-0.02em',
+    color: 'var(--text)',
+  },
+  qrSpinner: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '16px',
+    padding: '24px 0',
+  },
+  qrBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '16px',
+  },
+  qrImageWrap: {
+    background: '#fff',
+    borderRadius: '12px',
+    padding: '12px',
+    display: 'inline-flex',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+  },
+  qrImage: {
+    width: '200px',
+    height: '200px',
+    display: 'block',
+  },
+  qrStatusMsg: {
+    fontFamily: 'var(--font-mono)',
+    fontSize: '12px',
+    color: 'var(--text-2)',
+    textAlign: 'center',
+    letterSpacing: '0.04em',
+  },
+  qrHint: {
+    fontSize: '13px',
+    color: 'var(--text-3)',
+    textAlign: 'center',
     lineHeight: 1.5,
   },
+  qrSuccess: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '12px',
+    padding: '24px 0',
+  },
+  qrSuccessIcon: {
+    width: '52px',
+    height: '52px',
+    borderRadius: '50%',
+    background: 'rgba(62,207,142,0.12)',
+    border: '2px solid var(--green)',
+    color: 'var(--green)',
+    fontSize: '24px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontWeight: 700,
+  },
+  qrSuccessText: {
+    fontSize: '15px',
+    color: 'var(--text)',
+    fontWeight: 500,
+  },
+  qrErrorMsg: {
+    fontSize: '14px',
+    color: 'rgba(229,26,40,0.9)',
+    textAlign: 'center',
+    lineHeight: 1.5,
+  },
+  qrRetryBtn: {
+    background: 'var(--bg-2)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    color: 'var(--text)',
+    padding: '10px 20px',
+    fontSize: '14px',
+    cursor: 'pointer',
+    fontFamily: 'var(--font-ui)',
+  },
+
   slider: {
     width: '100%',
     accentColor: 'var(--red)',
@@ -947,15 +1198,6 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '13px',
     color: 'var(--text-3)',
     textAlign: 'center',
-  },
-  inlineBtn: {
-    color: 'var(--red)',
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    fontFamily: 'var(--font-ui)',
-    fontSize: '13px',
-    textDecoration: 'underline',
   },
   setupFooter: {
     marginTop: '40px',
