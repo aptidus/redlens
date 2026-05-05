@@ -69,7 +69,7 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15):
 
     async def event_generator():
         try:
-            yield {"event": "status", "data": json.dumps({"stage": "crawling", "message": f"Searching XHS for "{keyword}"…"})}
+            yield {"event": "status", "data": json.dumps({"stage": "crawling", "message": f'Searching XHS for “{keyword}”…'})}
 
             notes = await scrape_keyword(cookie, keyword, max_notes=max_notes)
 
