@@ -104,18 +104,34 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15):
 
 
 # Serve React frontend in production
-# In Docker: WORKDIR /app, api/ copied to /app/, frontend/dist copied to /app/frontend/dist/
-frontend_dist = Path(__file__).parent / "frontend" / "dist"
-if frontend_dist.exists():
+# In Docker: WORKDIR /app, api/ -> /app/, frontend/dist -> /app/frontend/dist/
+_here = Path(os.path.abspath(__file__)).parent
+frontend_dist = _here / "frontend" / "dist"
+
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.info(f"Frontend dist path: {frontend_dist} (exists={frontend_dist.exists()})")
+
+if (frontend_dist / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+    logger.info("Mounted /assets static files")
 
-    @app.get("/")
-    async def serve_root():
-        return FileResponse(str(frontend_dist / "index.html"))
+@app.get("/")
+async def serve_root():
+    p = frontend_dist / "index.html"
+    if p.exists():
+        return FileResponse(str(p))
+    return JSONResponse({"detail": "Frontend not found", "dist_path": str(frontend_dist)}, status_code=503)
 
-    @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
-        return FileResponse(str(frontend_dist / "index.html"))
+@app.get("/{full_path:path}")
+async def serve_spa(full_path: str):
+    if full_path.startswith("api/"):
+        raise HTTPException(404)
+    p = frontend_dist / "index.html"
+    if p.exists():
+        return FileResponse(str(p))
+    return JSONResponse({"detail": "Frontend not found", "dist_path": str(frontend_dist)}, status_code=503)
 
 
 if __name__ == "__main__":
