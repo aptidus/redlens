@@ -104,14 +104,18 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15):
 
 
 # Serve React frontend in production
-frontend_dist = Path(__file__).parent.parent / "frontend" / "dist"
+# In Docker: WORKDIR /app, api/ copied to /app/, frontend/dist copied to /app/frontend/dist/
+frontend_dist = Path(__file__).parent / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
 
+    @app.get("/")
+    async def serve_root():
+        return FileResponse(str(frontend_dist / "index.html"))
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        index = frontend_dist / "index.html"
-        return FileResponse(str(index))
+        return FileResponse(str(frontend_dist / "index.html"))
 
 
 if __name__ == "__main__":
