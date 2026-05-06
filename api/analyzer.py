@@ -1,6 +1,6 @@
 """
-AI analysis of scraped XHS notes using mimo-v2.5.
-Uses budget_tokens (not max_tokens) to control output length — reasoning runs freely on top.
+AI analysis of scraped content using mimo-v2.5.
+Platform-aware: adapts prompt for XHS (notes) vs Douyin (short videos).
 """
 import json
 import os
@@ -13,22 +13,32 @@ MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", "https://token-plan-sgp.xiaomimimo.co
 MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
 MIMO_MODEL = os.getenv("MIMO_MODEL", "mimo-v2.5")
 
+_PLATFORM_NAMES = {
+    "xhs": "Xiaohongshu (小红书)",
+    "douyin": "Douyin (抖音)",
+    "bilibili": "Bilibili",
+    "weibo": "Weibo (微博)",
+}
 
-async def analyze_notes(keyword: str, notes: List[Dict]) -> Dict[str, Any]:
+
+async def analyze_notes(keyword: str, notes: List[Dict], platform: str = "xhs") -> Dict[str, Any]:
     """
-    Send scraped notes to mimo-v2.5 and get a structured analysis report.
-    Returns a dict with keys: summary, top_patterns, content_insights,
+    Send scraped notes/videos to mimo-v2.5 and get a structured analysis report.
+    Returns a dict with: summary, top_patterns, content_insights,
     comment_insights, suggested_angles, hook_examples, metrics_summary.
-    Raises RuntimeError on any transport or API failure.
+    Raises RuntimeError on transport or API failure.
     """
-    notes_text = _format_notes_for_prompt(notes)
+    platform_name = _PLATFORM_NAMES.get(platform, platform.upper())
+    notes_text = _format_notes_for_prompt(notes, platform)
 
-    system_prompt = """You are an expert content strategist for Xiaohongshu (Little Red Book / 小红书).
+    system_prompt = f"""You are an expert content strategist for {platform_name}.
 Your job is to analyze top-performing posts and extract actionable insights for content creators.
 Be specific, concrete, and data-driven. Focus on what actually worked, not generic advice.
 Respond in JSON format only — no markdown fences, no extra text."""
 
-    user_prompt = f"""Analyze these top-performing Xiaohongshu posts for keyword: "{keyword}"
+    is_video = platform in ("douyin", "bilibili")
+
+    user_prompt = f"""Analyze these top-performing {platform_name} {"videos" if is_video else "posts"} for keyword: "{keyword}"
 
 {notes_text}
 
@@ -53,9 +63,9 @@ Return a JSON object with exactly these keys:
   ],
   "content_insights": {{
     "winning_title_formulas": ["<formula 1>", "<formula 2>", "<formula 3>"],
-    "best_content_formats": ["<format 1 with explanation>", "<format 2>"],
-    "optimal_length": "<observation about post length vs engagement>",
-    "visual_patterns": "<what type of cover images/videos performed best>",
+    "best_content_formats": ["<{'video length/style' if is_video else 'format'} 1 with explanation>", "<format 2>"],
+    "optimal_length": "<observation about {'video duration' if is_video else 'post length'} vs engagement>",
+    "visual_patterns": "<what type of {'opening frames/thumbnails' if is_video else 'cover images'} performed best>",
     "key_keywords_used": ["<keyword1>", "<keyword2>", "<keyword3>", "<keyword4>", "<keyword5>"],
     "trending_tags": ["<tag1>", "<tag2>", "<tag3>"]
   }},
@@ -83,7 +93,7 @@ Return a JSON object with exactly these keys:
     }}
   ],
   "hook_examples": [
-    "<compelling opening hook for a new post — specific and engaging>",
+    "<compelling opening {'line/hook' if is_video else 'hook for a new post'} — specific and engaging>",
     "<hook 2>",
     "<hook 3>",
     "<hook 4>",
@@ -131,7 +141,6 @@ Return a JSON object with exactly these keys:
     try:
         analysis = json.loads(content)
     except json.JSONDecodeError:
-        # Strip any accidental markdown fences
         content = re.sub(r"^```(?:json)?\s*", "", content.strip())
         content = re.sub(r"\s*```$", "", content)
         try:
@@ -144,15 +153,17 @@ Return a JSON object with exactly these keys:
         "completion_tokens": usage.get("completion_tokens", 0),
         "reasoning_tokens": usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0),
         "prompt_tokens": usage.get("prompt_tokens", 0),
+        "platform": platform,
     }
 
     return analysis
 
 
-def _format_notes_for_prompt(notes: List[Dict]) -> str:
+def _format_notes_for_prompt(notes: List[Dict], platform: str = "xhs") -> str:
+    is_video = platform in ("douyin", "bilibili")
     lines = []
     for i, note in enumerate(notes, 1):
-        lines.append(f"--- POST {i} ---")
+        lines.append(f"--- {'VIDEO' if is_video else 'POST'} {i} ---")
         lines.append(f"Title: {note.get('title', 'N/A')}")
 
         tags = note.get("tags", [])
@@ -160,16 +171,23 @@ def _format_notes_for_prompt(notes: List[Dict]) -> str:
             lines.append("Tags: " + " ".join(f"#{t}" for t in tags))
 
         desc = note.get("desc", "")
-        if desc:
+        if desc and desc != note.get("title", ""):
             lines.append(f"Content: {desc[:400]}")
 
-        lines.append(
+        if is_video and note.get("duration"):
+            lines.append(f"Duration: {note['duration'] / 1000:.0f}s")
+
+        stats = (
             f"Likes: {note.get('liked_count', 0)} | "
             f"Collects: {note.get('collected_count', 0)} | "
             f"Comments: {note.get('comment_count', 0)} | "
             f"Shares: {note.get('share_count', 0)}"
         )
-        lines.append(f"Creator: {note.get('user', 'N/A')} | Type: {note.get('type', 'normal')}")
+        if is_video and note.get("play_count"):
+            stats += f" | Plays: {note.get('play_count', 0)}"
+        lines.append(stats)
+
+        lines.append(f"Creator: {note.get('user', 'N/A')}")
 
         comments = note.get("comments", [])
         if comments:

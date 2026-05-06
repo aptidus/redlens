@@ -22,9 +22,10 @@ logger = logging.getLogger(__name__)
 
 from analyzer import analyze_notes
 from xhs_client import XHSAuthError, XHSRateLimitError, scrape_keyword
+from douyin_client import DouyinAuthError, DouyinRateLimitError, scrape_douyin
 from login_manager import xhs_qr_login
 
-app = FastAPI(title="RedLens", version="2.0.0")
+app = FastAPI(title="RedLens", version="3.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,16 +34,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SUPPORTED_PLATFORMS = {"xhs", "douyin"}
+
 
 class ValidateCookieRequest(BaseModel):
     cookie: str
+    platform: str = "xhs"
 
 
 @app.on_event("startup")
 async def _startup():
     if not os.getenv("MIMO_API_KEY"):
         logger.warning("MIMO_API_KEY not set — AI analysis will fail")
-    logger.info("RedLens v2 started. Model: %s", os.getenv("MIMO_MODEL", "mimo-v2.5"))
+    logger.info("RedLens v3 started. Model: %s", os.getenv("MIMO_MODEL", "mimo-v2.5"))
 
 
 @app.get("/api/health")
@@ -51,6 +55,7 @@ async def health():
         "status": "ok",
         "model": os.getenv("MIMO_MODEL", "mimo-v2.5"),
         "api_key_set": bool(os.getenv("MIMO_API_KEY")),
+        "platforms": list(SUPPORTED_PLATFORMS),
     }
 
 
@@ -65,24 +70,44 @@ async def login_qr():
 
 @app.post("/api/validate-cookie")
 async def validate_cookie(req: ValidateCookieRequest):
-    """Quick check that the XHS cookie is valid by doing a test search."""
-    from xhs_client import XHSClient
-    client = XHSClient(req.cookie)
-    try:
-        await client.search_notes("test", page_size=1)
-        await client.close()
-        return {"valid": True}
-    except XHSAuthError as e:
-        await client.close()
-        return {"valid": False, "error": "Cookie expired or invalid. Please scan QR again.", "code": "auth"}
-    except Exception as e:
-        await client.close()
-        return {"valid": False, "error": str(e)[:200], "code": "unknown"}
+    """Quick check that the platform cookie is valid."""
+    platform = req.platform.lower()
+
+    if platform == "xhs":
+        from xhs_client import XHSClient
+        client = XHSClient(req.cookie)
+        try:
+            await client.search_notes("test", page_size=1)
+            await client.close()
+            return {"valid": True}
+        except XHSAuthError:
+            await client.close()
+            return {"valid": False, "error": "Cookie expired or invalid. Please scan QR again.", "code": "auth"}
+        except Exception as e:
+            await client.close()
+            return {"valid": False, "error": str(e)[:200], "code": "unknown"}
+
+    elif platform == "douyin":
+        from douyin_client import DouyinClient
+        client = DouyinClient(req.cookie)
+        try:
+            await client.search_videos("test", count=1)
+            await client.close()
+            return {"valid": True}
+        except DouyinAuthError:
+            await client.close()
+            return {"valid": False, "error": "Cookie expired or invalid. Please update your Douyin cookie.", "code": "auth"}
+        except Exception as e:
+            await client.close()
+            return {"valid": False, "error": str(e)[:200], "code": "unknown"}
+
+    else:
+        raise HTTPException(400, f"Unknown platform: {platform}. Supported: {list(SUPPORTED_PLATFORMS)}")
 
 
 @app.get("/api/analyze")
-async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15):
-    """SSE stream: crawl XHS → AI analysis → done."""
+async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platform: str = "xhs"):
+    """SSE stream: crawl platform → AI analysis → done."""
     if not keyword.strip():
         raise HTTPException(400, "keyword required")
     if not cookie.strip():
@@ -90,14 +115,27 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15):
     if max_notes < 1 or max_notes > 30:
         raise HTTPException(400, "max_notes must be 1–30")
 
+    platform = platform.lower()
+    if platform not in SUPPORTED_PLATFORMS:
+        raise HTTPException(400, f"Unknown platform: {platform}")
+
+    platform_labels = {
+        "xhs": "小红书",
+        "douyin": "抖音",
+    }
+    label = platform_labels.get(platform, platform)
+
     async def event_generator():
         try:
             yield {"event": "status", "data": json.dumps({
                 "stage": "crawling",
-                "message": f'Searching XHS for "{keyword}"…',
+                "message": f'Searching {label} for "{keyword}"…',
             })}
 
-            notes = await scrape_keyword(cookie, keyword, max_notes=max_notes)
+            if platform == "xhs":
+                notes = await scrape_keyword(cookie, keyword, max_notes=max_notes)
+            else:
+                notes = await scrape_douyin(cookie, keyword, max_notes=max_notes)
 
             if not notes:
                 yield {"event": "error", "data": json.dumps({
@@ -111,7 +149,7 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15):
                 "count": len(notes),
             })}
 
-            analysis = await analyze_notes(keyword, notes)
+            analysis = await analyze_notes(keyword, notes, platform=platform)
 
             analysis["_posts"] = [
                 {
@@ -120,27 +158,30 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15):
                     "liked_count": n.get("liked_count", 0),
                     "collected_count": n.get("collected_count", 0),
                     "comment_count": n.get("comment_count", 0),
+                    "play_count": n.get("play_count", 0),
                     "cover_url": n.get("cover_url", ""),
                     "type": n.get("type", "normal"),
                     "tags": n.get("tags", []),
+                    "duration": n.get("duration", 0),
                 }
                 for n in notes
             ]
+            analysis["_platform"] = platform
 
             yield {"event": "done", "data": json.dumps(analysis)}
 
-        except XHSAuthError:
+        except (XHSAuthError, DouyinAuthError):
             yield {"event": "error", "data": json.dumps({
-                "message": "Your 小红书 session has expired. Please scan QR to reconnect.",
+                "message": f"Your {label} session has expired. Please reconnect.",
                 "code": "auth",
             })}
-        except XHSRateLimitError:
+        except (XHSRateLimitError, DouyinRateLimitError):
             yield {"event": "error", "data": json.dumps({
-                "message": "XHS rate limit hit. Wait a few minutes and try again.",
+                "message": f"{label} rate limit hit. Wait a few minutes and try again.",
                 "code": "rate_limit",
             })}
         except Exception as e:
-            logger.exception("analyze_stream error for keyword=%r", keyword)
+            logger.exception("analyze_stream error for keyword=%r platform=%r", keyword, platform)
             yield {"event": "error", "data": json.dumps({"message": str(e)})}
 
     return EventSourceResponse(event_generator())

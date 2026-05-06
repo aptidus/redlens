@@ -1,23 +1,30 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 
-const COOKIE_KEY = 'redlens_xhs_cookie'
-const USERNAME_KEY = 'redlens_xhs_username'
+// ─── Storage helpers ──────────────────────────────────────────────────────────
 
-function loadStoredCookie(): { cookie: string; username: string } {
+type Platform = 'xhs' | 'douyin'
+
+const STORAGE_KEYS: Record<Platform, { cookie: string; username: string }> = {
+  xhs: { cookie: 'redlens_xhs_cookie', username: 'redlens_xhs_username' },
+  douyin: { cookie: 'redlens_douyin_cookie', username: 'redlens_douyin_username' },
+}
+
+function loadSession(p: Platform) {
+  const k = STORAGE_KEYS[p]
   return {
-    cookie: localStorage.getItem(COOKIE_KEY) ?? '',
-    username: localStorage.getItem(USERNAME_KEY) ?? '',
+    cookie: localStorage.getItem(k.cookie) ?? '',
+    username: localStorage.getItem(k.username) ?? '',
   }
 }
-
-function storeCookie(cookie: string, username: string) {
-  localStorage.setItem(COOKIE_KEY, cookie)
-  localStorage.setItem(USERNAME_KEY, username)
+function storeSession(p: Platform, cookie: string, username: string) {
+  const k = STORAGE_KEYS[p]
+  localStorage.setItem(k.cookie, cookie)
+  localStorage.setItem(k.username, username)
 }
-
-function clearCookie() {
-  localStorage.removeItem(COOKIE_KEY)
-  localStorage.removeItem(USERNAME_KEY)
+function clearSession(p: Platform) {
+  const k = STORAGE_KEYS[p]
+  localStorage.removeItem(k.cookie)
+  localStorage.removeItem(k.username)
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -34,52 +41,49 @@ interface MetricsSummary {
   top_post_likes: number
   engagement_rate_insight: string
 }
-
 interface Pattern {
   pattern: string
   frequency: string
   example: string
   why_it_works: string
 }
-
 interface ContentInsights {
   winning_title_formulas: string[]
   best_content_formats: string[]
   optimal_length: string
   visual_patterns: string
   key_keywords_used: string[]
+  trending_tags?: string[]
 }
-
 interface CommentInsights {
   top_pain_points: string[]
   common_questions: string[]
   sentiment: string
   engagement_triggers: string[]
 }
-
 interface SuggestedAngle {
   angle: string
   rationale: string
   differentiation: string
 }
-
 interface PostSummary {
   title: string
   user: string
   liked_count: number
   collected_count: number
   comment_count: number
+  play_count?: number
   cover_url: string
   type: string
+  duration?: number
 }
-
 interface AnalysisMeta {
   model: string
   completion_tokens: number
   reasoning_tokens: number
   prompt_tokens: number
+  platform?: string
 }
-
 interface AnalysisResult {
   metrics_summary: MetricsSummary
   top_patterns: Pattern[]
@@ -90,46 +94,37 @@ interface AnalysisResult {
   summary: string
   _posts: PostSummary[]
   _meta: AnalysisMeta
+  _platform?: string
 }
+
+// ─── Platform config ──────────────────────────────────────────────────────────
+
+const PLATFORMS: { id: Platform; label: string; emoji: string; color: string; name: string }[] = [
+  { id: 'xhs', label: '小红书', emoji: '📕', color: '#E51A28', name: 'Xiaohongshu' },
+  { id: 'douyin', label: '抖音', emoji: '🎵', color: '#161823', name: 'Douyin' },
+]
 
 // ─── Lens Logo ────────────────────────────────────────────────────────────────
 
 function LensLogo({ size = 40, spinning = false }: { size?: number; spinning?: boolean }) {
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 40 40"
-      fill="none"
-      style={{
-        animation: spinning ? 'spin-slow 3s linear infinite' : undefined,
-        flexShrink: 0,
-      }}
-    >
-      {/* Outer ring */}
+    <svg width={size} height={size} viewBox="0 0 40 40" fill="none"
+      style={{ animation: spinning ? 'spin-slow 3s linear infinite' : undefined, flexShrink: 0 }}>
       <circle cx="20" cy="20" r="18" stroke="#E51A28" strokeWidth="1.5" />
-      {/* Aperture blades */}
       {[0, 60, 120, 180, 240, 300].map((angle, i) => (
-        <path
-          key={i}
+        <path key={i}
           d={`M20 20 L${20 + 14 * Math.cos((angle * Math.PI) / 180)} ${20 + 14 * Math.sin((angle * Math.PI) / 180)} A14 14 0 0 1 ${20 + 14 * Math.cos(((angle + 55) * Math.PI) / 180)} ${20 + 14 * Math.sin(((angle + 55) * Math.PI) / 180)} Z`}
-          fill="#E51A28"
-          opacity={0.15 + i * 0.05}
-        />
+          fill="#E51A28" opacity={0.15 + i * 0.05} />
       ))}
-      {/* Inner circle */}
       <circle cx="20" cy="20" r="6" fill="#E51A28" opacity="0.9" />
       <circle cx="20" cy="20" r="3" fill="#080809" />
     </svg>
   )
 }
 
-// ─── QR Modal ─────────────────────────────────────────────────────────────────
+// ─── QR Modal (XHS) ───────────────────────────────────────────────────────────
 
-function QRModal({
-  onAuthenticated,
-  onClose,
-}: {
+function QRModal({ onAuthenticated, onClose }: {
   onAuthenticated: (cookie: string, username: string) => void
   onClose: () => void
 }) {
@@ -138,24 +133,15 @@ function QRModal({
   const [statusMsg, setStatusMsg] = useState('Connecting to 小红书…')
   const qrStateRef = useRef<QRState>('connecting')
 
-  useEffect(() => {
-    qrStateRef.current = qrState
-  }, [qrState])
+  useEffect(() => { qrStateRef.current = qrState }, [qrState])
 
   useEffect(() => {
     const es = new EventSource('/api/login/qr')
-
-    es.addEventListener('status', (e: MessageEvent) => {
-      const data = JSON.parse(e.data)
-      setStatusMsg(data.message)
-    })
-
+    es.addEventListener('status', (e: MessageEvent) => setStatusMsg(JSON.parse(e.data).message))
     es.addEventListener('qr', (e: MessageEvent) => {
-      const data = JSON.parse(e.data)
-      setQrImage(data.image)
+      setQrImage(JSON.parse(e.data).image)
       setQrState('showing')
     })
-
     es.addEventListener('authenticated', (e: MessageEvent) => {
       const data = JSON.parse(e.data)
       setQrState('done')
@@ -163,50 +149,35 @@ function QRModal({
       es.close()
       setTimeout(() => onAuthenticated(data.cookie, data.username || ''), 700)
     })
-
     es.addEventListener('error', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data)
-        setStatusMsg(data.message || 'Login failed.')
-      } catch {
-        setStatusMsg('Connection error.')
-      }
+      try { setStatusMsg(JSON.parse(e.data).message || 'Login failed.') } catch { setStatusMsg('Connection error.') }
       setQrState('error')
       es.close()
     })
-
     es.onerror = () => {
-      const s = qrStateRef.current
-      if (s !== 'done' && s !== 'error') {
+      if (qrStateRef.current !== 'done' && qrStateRef.current !== 'error') {
         setStatusMsg('Connection lost.')
         setQrState('error')
       }
       es.close()
     }
-
     return () => { es.close() }
   }, [])
 
   return (
-    <div
-      style={styles.qrOverlay}
-      onClick={e => { if (e.target === e.currentTarget) onClose() }}
-    >
+    <div style={styles.qrOverlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
       <div style={styles.qrModal}>
-        <button style={styles.qrClose} onClick={onClose} aria-label="Close">✕</button>
-
+        <button style={styles.qrClose} onClick={onClose}>✕</button>
         <div style={styles.qrHeader}>
           <LensLogo size={28} />
           <h3 style={styles.qrTitle}>Connect 小红书</h3>
         </div>
-
         {qrState === 'connecting' && (
           <div style={styles.qrSpinner}>
             <LensLogo size={44} spinning />
             <p style={styles.qrStatusMsg}>{statusMsg}</p>
           </div>
         )}
-
         {qrState === 'showing' && (
           <div style={styles.qrBody}>
             <div style={styles.qrImageWrap}>
@@ -216,20 +187,16 @@ function QRModal({
             <p style={styles.qrHint}>Open 小红书 app → tap profile → Scan QR</p>
           </div>
         )}
-
         {qrState === 'done' && (
           <div style={styles.qrSuccess}>
             <div style={styles.qrSuccessIcon}>✓</div>
             <p style={styles.qrSuccessText}>Connected successfully!</p>
           </div>
         )}
-
         {qrState === 'error' && (
           <div style={styles.qrBody}>
             <p style={styles.qrErrorMsg}>{statusMsg}</p>
-            <button style={styles.qrRetryBtn} onClick={onClose}>
-              Close &amp; try again
-            </button>
+            <button style={styles.qrRetryBtn} onClick={onClose}>Close &amp; try again</button>
           </div>
         )}
       </div>
@@ -237,36 +204,102 @@ function QRModal({
   )
 }
 
+// ─── Douyin Cookie Section ────────────────────────────────────────────────────
+
+function DouyinCookieSection({ session, onSave, onClear }: {
+  session: { cookie: string; username: string }
+  onSave: (cookie: string) => void
+  onClear: () => void
+}) {
+  const [expanded, setExpanded] = useState(!session.cookie)
+  const [input, setInput] = useState('')
+
+  if (session.cookie) {
+    return (
+      <div style={styles.sessionRow}>
+        <div style={styles.sessionBadge}>
+          <span style={styles.sessionDot} />
+          <span style={styles.sessionName}>{session.username || 'Douyin Connected'}</span>
+        </div>
+        <button style={styles.switchBtn} onClick={onClear}>Switch account</button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={styles.cookieSection}>
+      <button style={styles.cookieToggle} onClick={() => setExpanded(x => !x)}>
+        <span>🔑 Paste Douyin Cookie</span>
+        <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>{expanded ? '▲' : '▼'}</span>
+      </button>
+      {expanded && (
+        <div style={styles.cookieBody}>
+          <p style={styles.cookieInstructions}>
+            1. Open <strong>douyin.com</strong> in Chrome (logged in)<br />
+            2. Press <code>F12</code> → Network tab → search for any request<br />
+            3. Click a request → Headers → find <code>Cookie:</code><br />
+            4. Copy the full value and paste below
+          </p>
+          <textarea
+            style={styles.cookieTextarea}
+            placeholder="msToken=...; ttwid=...; s_v_web_id=..."
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            rows={3}
+          />
+          <button
+            style={{ ...styles.cookieSaveBtn, ...(input.trim() ? {} : styles.analyzeBtnDisabled) }}
+            disabled={!input.trim()}
+            onClick={() => { onSave(input.trim()); setInput('') }}
+          >
+            Save Cookie
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Setup Screen ─────────────────────────────────────────────────────────────
 
-function SetupScreen({
-  onAnalyze,
-}: {
-  onAnalyze: (keyword: string, cookie: string, maxNotes: number) => void
+function SetupScreen({ onAnalyze }: {
+  onAnalyze: (keyword: string, cookie: string, maxNotes: number, platform: Platform) => void
 }) {
+  const [platform, setPlatform] = useState<Platform>('xhs')
   const [keyword, setKeyword] = useState('')
   const [maxNotes, setMaxNotes] = useState(15)
-  const [session, setSession] = useState(() => loadStoredCookie())
+  const [sessions, setSessions] = useState<Record<Platform, { cookie: string; username: string }>>({
+    xhs: loadSession('xhs'),
+    douyin: loadSession('douyin'),
+  })
   const [showQR, setShowQR] = useState(false)
 
+  const session = sessions[platform]
   const canSubmit = keyword.trim().length > 0 && session.cookie.trim().length > 0
+  const activePlatform = PLATFORMS.find(p => p.id === platform)!
 
   const handleAuthenticated = useCallback((cookie: string, username: string) => {
-    storeCookie(cookie, username)
-    setSession({ cookie, username })
+    storeSession(platform, cookie, username)
+    setSessions(s => ({ ...s, [platform]: { cookie, username } }))
     setShowQR(false)
+  }, [platform])
+
+  const handleClearSession = useCallback((p: Platform) => {
+    clearSession(p)
+    setSessions(s => ({ ...s, [p]: { cookie: '', username: '' } }))
+  }, [])
+
+  const handleDouyinSave = useCallback((cookie: string) => {
+    storeSession('douyin', cookie, '')
+    setSessions(s => ({ ...s, douyin: { cookie, username: '' } }))
   }, [])
 
   return (
     <div style={styles.setupWrap}>
       {showQR && (
-        <QRModal
-          onAuthenticated={handleAuthenticated}
-          onClose={() => setShowQR(false)}
-        />
+        <QRModal onAuthenticated={handleAuthenticated} onClose={() => setShowQR(false)} />
       )}
 
-      {/* Background accent */}
       <div style={styles.setupGlow} />
 
       {/* Header */}
@@ -275,14 +308,14 @@ function SetupScreen({
           <LensLogo size={36} />
           <span style={styles.wordmark}>RedLens</span>
         </div>
-        <div style={styles.headerTag}>XHS Content Intelligence</div>
+        <div style={styles.headerTag}>Content Intelligence</div>
       </header>
 
       {/* Hero */}
       <div style={styles.hero}>
         <h1 style={styles.heroTitle}>
           Decode what makes<br />
-          <em style={styles.heroEm}>XHS content</em> go viral.
+          <em style={styles.heroEm}>viral content</em> work.
         </h1>
         <p style={styles.heroSub}>
           Enter a keyword. We analyze the top posts, comments, and patterns —
@@ -292,58 +325,84 @@ function SetupScreen({
 
       {/* Form card */}
       <div style={styles.formCard}>
+
+        {/* Platform tabs */}
+        <div style={styles.platformTabs}>
+          {PLATFORMS.map(p => (
+            <button
+              key={p.id}
+              style={{
+                ...styles.platformTab,
+                ...(platform === p.id ? styles.platformTabActive : {}),
+              }}
+              onClick={() => setPlatform(p.id)}
+            >
+              <span style={styles.platformEmoji}>{p.emoji}</span>
+              <span>{p.label}</span>
+              {sessions[p.id].cookie && (
+                <span style={styles.platformConnectedDot} />
+              )}
+            </button>
+          ))}
+        </div>
+
         {/* Keyword */}
         <div style={styles.fieldGroup}>
           <label style={styles.label}>KEYWORD</label>
           <input
             style={styles.input}
             type="text"
-            placeholder="e.g. 减肥, 护肤, 穿搭, 旅游"
+            placeholder={platform === 'xhs' ? 'e.g. 减肥, 护肤, 穿搭, 旅游' : 'e.g. 减肥, 护肤, 穿搭, 搞笑'}
             value={keyword}
             onChange={e => setKeyword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && canSubmit && onAnalyze(keyword, session.cookie, maxNotes)}
+            onKeyDown={e => e.key === 'Enter' && canSubmit && onAnalyze(keyword, session.cookie, maxNotes, platform)}
             autoFocus
           />
         </div>
 
-        {/* XHS Account */}
+        {/* Auth section */}
         <div style={styles.fieldGroup}>
-          <label style={styles.label}>XHS ACCOUNT</label>
-          {session.cookie ? (
-            <div style={styles.sessionRow}>
-              <div style={styles.sessionBadge}>
-                <span style={styles.sessionDot} />
-                <span style={styles.sessionName}>
-                  {session.username || 'Connected'}
-                </span>
+          <label style={styles.label}>
+            {activePlatform.emoji} {activePlatform.label.toUpperCase()} ACCOUNT
+          </label>
+
+          {platform === 'xhs' && (
+            session.cookie ? (
+              <div style={styles.sessionRow}>
+                <div style={styles.sessionBadge}>
+                  <span style={styles.sessionDot} />
+                  <span style={styles.sessionName}>{session.username || 'Connected'}</span>
+                </div>
+                <button style={styles.switchBtn} onClick={() => handleClearSession('xhs')}>
+                  Switch account
+                </button>
               </div>
-              <button
-                style={styles.switchBtn}
-                onClick={() => {
-                  clearCookie()
-                  setSession({ cookie: '', username: '' })
-                }}
-              >
-                Switch account
+            ) : (
+              <button style={styles.qrLoginBtn} onClick={() => setShowQR(true)}>
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <rect x="2" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                  <rect x="11" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                  <rect x="2" y="11" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+                  <rect x="4" y="4" width="3" height="3" fill="currentColor" />
+                  <rect x="13" y="4" width="3" height="3" fill="currentColor" />
+                  <rect x="4" y="13" width="3" height="3" fill="currentColor" />
+                  <rect x="11" y="11" width="2" height="2" fill="currentColor" />
+                  <rect x="15" y="11" width="2" height="2" fill="currentColor" />
+                  <rect x="13" y="13" width="2" height="2" fill="currentColor" />
+                  <rect x="11" y="15" width="2" height="2" fill="currentColor" />
+                  <rect x="15" y="15" width="2" height="2" fill="currentColor" />
+                </svg>
+                Scan QR to connect 小红书
               </button>
-            </div>
-          ) : (
-            <button style={styles.qrLoginBtn} onClick={() => setShowQR(true)}>
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <rect x="2" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-                <rect x="11" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-                <rect x="2" y="11" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-                <rect x="4" y="4" width="3" height="3" fill="currentColor" />
-                <rect x="13" y="4" width="3" height="3" fill="currentColor" />
-                <rect x="4" y="13" width="3" height="3" fill="currentColor" />
-                <rect x="11" y="11" width="2" height="2" fill="currentColor" />
-                <rect x="15" y="11" width="2" height="2" fill="currentColor" />
-                <rect x="13" y="13" width="2" height="2" fill="currentColor" />
-                <rect x="11" y="15" width="2" height="2" fill="currentColor" />
-                <rect x="15" y="15" width="2" height="2" fill="currentColor" />
-              </svg>
-              Scan QR to connect 小红书
-            </button>
+            )
+          )}
+
+          {platform === 'douyin' && (
+            <DouyinCookieSection
+              session={session}
+              onSave={handleDouyinSave}
+              onClear={() => handleClearSession('douyin')}
+            />
           )}
         </div>
 
@@ -353,14 +412,8 @@ function SetupScreen({
             POSTS TO ANALYZE
             <span style={styles.sliderVal}>{maxNotes}</span>
           </label>
-          <input
-            type="range"
-            min={5}
-            max={20}
-            value={maxNotes}
-            onChange={e => setMaxNotes(Number(e.target.value))}
-            style={styles.slider}
-          />
+          <input type="range" min={5} max={20} value={maxNotes}
+            onChange={e => setMaxNotes(Number(e.target.value))} style={styles.slider} />
           <div style={styles.sliderLabels}>
             <span>5 (faster)</span>
             <span>20 (deeper)</span>
@@ -369,20 +422,17 @@ function SetupScreen({
 
         {/* CTA */}
         <button
-          style={{
-            ...styles.analyzeBtn,
-            ...(canSubmit ? {} : styles.analyzeBtnDisabled),
-          }}
+          style={{ ...styles.analyzeBtn, ...(canSubmit ? {} : styles.analyzeBtnDisabled) }}
           disabled={!canSubmit}
-          onClick={() => onAnalyze(keyword, session.cookie, maxNotes)}
+          onClick={() => onAnalyze(keyword, session.cookie, maxNotes, platform)}
         >
           <LensLogo size={20} />
-          <span>Analyze "{keyword || '…'}"</span>
+          <span>Analyze "{keyword || '…'}" on {activePlatform.label}</span>
         </button>
 
         {!session.cookie && (
           <p style={styles.cookieHint}>
-            ↑ Connect your 小红书 account to start analyzing.
+            ↑ Connect your {activePlatform.label} account to start analyzing.
           </p>
         )}
       </div>
@@ -396,60 +446,42 @@ function SetupScreen({
 
 // ─── Loading Screen ───────────────────────────────────────────────────────────
 
-function LoadingScreen({
-  stage,
-  message,
-  keyword,
-  onCancel,
-}: {
+function LoadingScreen({ stage, message, keyword, platform, onCancel }: {
   stage: LoadStage
   message: string
   keyword: string
+  platform: Platform
   onCancel: () => void
 }) {
-  const dots = [0, 1, 2]
+  const platformLabel = PLATFORMS.find(p => p.id === platform)?.label ?? platform
   return (
     <div style={styles.loadWrap}>
       <div style={styles.loadGlow} />
-
       <div style={styles.loadContent}>
         <div style={styles.loadLogoWrap}>
           <div style={styles.loadRing} />
           <LensLogo size={52} spinning />
         </div>
-
         <div style={styles.loadStage}>
           <span style={stage === 'crawling' ? styles.loadStageActive : styles.loadStageDone}>
-            {stage === 'crawling' ? '●' : '✓'} Crawling XHS
+            {stage === 'crawling' ? '●' : '✓'} Crawling {platformLabel}
           </span>
           <span style={styles.loadArrow}>→</span>
           <span style={stage === 'analyzing' ? styles.loadStageActive : styles.loadStagePending}>
             {stage === 'analyzing' ? '●' : '○'} AI Analysis
           </span>
         </div>
-
         <h2 style={styles.loadKeyword}>"{keyword}"</h2>
-
         <p style={styles.loadMessage}>
           {message}
           <span style={{ animation: 'blink 1s step-start infinite' }}>_</span>
         </p>
-
         <div style={styles.loadDots}>
-          {dots.map(i => (
-            <span
-              key={i}
-              style={{
-                ...styles.loadDot,
-                animationDelay: `${i * 0.2}s`,
-              }}
-            />
+          {[0, 1, 2].map(i => (
+            <span key={i} style={{ ...styles.loadDot, animationDelay: `${i * 0.2}s` }} />
           ))}
         </div>
-
-        <button style={styles.cancelBtn} onClick={onCancel}>
-          Cancel
-        </button>
+        <button style={styles.cancelBtn} onClick={onCancel}>Cancel</button>
       </div>
     </div>
   )
@@ -458,10 +490,7 @@ function LoadingScreen({
 // ─── Metric Card ──────────────────────────────────────────────────────────────
 
 function MetricCard({ label, value, icon }: { label: string; value: number; icon: string }) {
-  const formatted = value >= 10000
-    ? `${(value / 10000).toFixed(1)}万`
-    : value.toLocaleString()
-
+  const formatted = value >= 10000 ? `${(value / 10000).toFixed(1)}万` : value.toLocaleString()
   return (
     <div style={styles.metricCard}>
       <span style={styles.metricIcon}>{icon}</span>
@@ -473,17 +502,12 @@ function MetricCard({ label, value, icon }: { label: string; value: number; icon
 
 // ─── Report Screen ────────────────────────────────────────────────────────────
 
-function ReportScreen({
-  result,
-  keyword,
-  onReset,
-}: {
+function ReportScreen({ result, keyword, onReset }: {
   result: AnalysisResult
   keyword: string
   onReset: () => void
 }) {
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
-
   const copyHook = useCallback((text: string, idx: number) => {
     navigator.clipboard.writeText(text)
     setCopiedIdx(idx)
@@ -493,6 +517,9 @@ function ReportScreen({
   const ms = result.metrics_summary
   const ci = result.content_insights
   const cmi = result.comment_insights
+  const platform = result._platform as Platform | undefined
+  const platformInfo = PLATFORMS.find(p => p.id === platform)
+  const isVideo = platform === 'douyin'
 
   return (
     <div style={styles.reportWrap}>
@@ -503,22 +530,26 @@ function ReportScreen({
           <span style={styles.navBrand}>RedLens</span>
         </div>
         <div style={styles.navKeyword}>"{keyword}"</div>
-        <button style={styles.navNew} onClick={onReset}>
-          + New Analysis
-        </button>
+        <button style={styles.navNew} onClick={onReset}>+ New Analysis</button>
       </div>
 
       <div style={styles.reportContent}>
-        {/* Hero summary */}
+        {/* Hero */}
         <section style={styles.reportHero}>
           <div style={styles.reportMeta}>
-            <span style={styles.reportMetaItem}>
-              {ms.total_posts_analyzed} posts analyzed
-            </span>
+            <span style={styles.reportMetaItem}>{ms.total_posts_analyzed} posts analyzed</span>
             <span style={styles.reportMetaDot}>·</span>
             <span style={styles.reportMetaItem}>
               {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
             </span>
+            {platformInfo && (
+              <>
+                <span style={styles.reportMetaDot}>·</span>
+                <span style={{ ...styles.reportMetaModel, background: 'rgba(229,26,40,0.1)', color: 'var(--red)' }}>
+                  {platformInfo.emoji} {platformInfo.label}
+                </span>
+              </>
+            )}
             <span style={styles.reportMetaDot}>·</span>
             <span style={styles.reportMetaModel}>{result._meta?.model || 'mimo-v2.5'}</span>
           </div>
@@ -529,7 +560,7 @@ function ReportScreen({
           <p style={styles.reportSummary}>{result.summary}</p>
         </section>
 
-        {/* Metrics row */}
+        {/* Metrics */}
         <section style={styles.section}>
           <div style={styles.metricsRow}>
             <MetricCard label="Avg. Likes" value={ms.avg_likes} icon="❤️" />
@@ -552,9 +583,7 @@ function ReportScreen({
                   <div style={styles.patternNum}>0{i + 1}</div>
                   <h3 style={styles.patternTitle}>{p.pattern}</h3>
                   <div style={styles.patternFreq}>{p.frequency}</div>
-                  {p.example && (
-                    <p style={styles.patternExample}>"{p.example}"</p>
-                  )}
+                  {p.example && <p style={styles.patternExample}>"{p.example}"</p>}
                   <p style={styles.patternWhy}>{p.why_it_works}</p>
                 </div>
               ))}
@@ -568,7 +597,7 @@ function ReportScreen({
           <div style={styles.insightGrid}>
             {ci.winning_title_formulas?.length > 0 && (
               <div style={styles.insightCard}>
-                <h4 style={styles.insightCardTitle}>Title Formulas That Win</h4>
+                <h4 style={styles.insightCardTitle}>{isVideo ? 'Hook Formulas That Win' : 'Title Formulas That Win'}</h4>
                 {ci.winning_title_formulas.map((f, i) => (
                   <div key={i} style={styles.formula}>
                     <span style={styles.formulaNum}>{i + 1}</span>
@@ -577,10 +606,9 @@ function ReportScreen({
                 ))}
               </div>
             )}
-
             {ci.best_content_formats?.length > 0 && (
               <div style={styles.insightCard}>
-                <h4 style={styles.insightCardTitle}>Best Content Formats</h4>
+                <h4 style={styles.insightCardTitle}>{isVideo ? 'Best Video Styles' : 'Best Content Formats'}</h4>
                 {ci.best_content_formats.map((f, i) => (
                   <div key={i} style={styles.formatItem}>
                     <span style={styles.formatBullet} />
@@ -589,13 +617,11 @@ function ReportScreen({
                 ))}
               </div>
             )}
-
             <div style={styles.insightCard}>
-              <h4 style={styles.insightCardTitle}>Length & Visuals</h4>
+              <h4 style={styles.insightCardTitle}>{isVideo ? 'Duration & Visuals' : 'Length & Visuals'}</h4>
               {ci.optimal_length && <p style={styles.insightText}>{ci.optimal_length}</p>}
               {ci.visual_patterns && <p style={styles.insightText}>{ci.visual_patterns}</p>}
             </div>
-
             {ci.key_keywords_used?.length > 0 && (
               <div style={styles.insightCard}>
                 <h4 style={styles.insightCardTitle}>Key Keywords in Top Posts</h4>
@@ -604,6 +630,16 @@ function ReportScreen({
                     <span key={i} style={styles.pill}>{kw}</span>
                   ))}
                 </div>
+                {ci.trending_tags?.length ? (
+                  <>
+                    <h4 style={{ ...styles.insightCardTitle, marginTop: '12px' }}>Trending Tags</h4>
+                    <div style={styles.pillRow}>
+                      {ci.trending_tags.map((t, i) => (
+                        <span key={i} style={{ ...styles.pill, background: 'rgba(62,207,142,0.08)', borderColor: 'rgba(62,207,142,0.2)', color: 'var(--green)' }}>#{t}</span>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
               </div>
             )}
           </div>
@@ -615,26 +651,20 @@ function ReportScreen({
           <div style={styles.commentGrid}>
             {cmi.top_pain_points?.length > 0 && (
               <div style={styles.commentCard}>
-                <h4 style={styles.commentCardTitle}>
-                  <span style={{ color: 'var(--red)' }}>⚡</span> Top Pain Points
-                </h4>
+                <h4 style={styles.commentCardTitle}><span style={{ color: 'var(--red)' }}>⚡</span> Top Pain Points</h4>
                 {cmi.top_pain_points.map((p, i) => (
                   <div key={i} style={styles.commentItem}>
-                    <span style={styles.commentBullet}>→</span>
-                    <span>{p}</span>
+                    <span style={styles.commentBullet}>→</span><span>{p}</span>
                   </div>
                 ))}
               </div>
             )}
             {cmi.common_questions?.length > 0 && (
               <div style={styles.commentCard}>
-                <h4 style={styles.commentCardTitle}>
-                  <span style={{ color: 'var(--gold)' }}>?</span> Common Questions
-                </h4>
+                <h4 style={styles.commentCardTitle}><span style={{ color: 'var(--gold)' }}>?</span> Common Questions</h4>
                 {cmi.common_questions.map((q, i) => (
                   <div key={i} style={styles.commentItem}>
-                    <span style={styles.commentBullet}>→</span>
-                    <span>{q}</span>
+                    <span style={styles.commentBullet}>→</span><span>{q}</span>
                   </div>
                 ))}
               </div>
@@ -679,10 +709,7 @@ function ReportScreen({
                   <span style={styles.hookNum}>0{i + 1}</span>
                   <span style={styles.hookText}>{h}</span>
                   <button
-                    style={{
-                      ...styles.copyBtn,
-                      ...(copiedIdx === i ? styles.copyBtnDone : {}),
-                    }}
+                    style={{ ...styles.copyBtn, ...(copiedIdx === i ? styles.copyBtnDone : {}) }}
                     onClick={() => copyHook(h, i)}
                   >
                     {copiedIdx === i ? '✓ Copied' : 'Copy'}
@@ -701,14 +728,17 @@ function ReportScreen({
               {result._posts.map((p, i) => (
                 <div key={i} style={styles.postCard}>
                   <div style={styles.postHeader}>
-                    <span style={styles.postType}>{p.type === 'video' ? '▶ Video' : '📄 Note'}</span>
+                    <span style={styles.postType}>
+                      {p.type === 'video' ? '▶ Video' : '📄 Note'}
+                      {p.duration ? ` · ${(p.duration / 1000).toFixed(0)}s` : ''}
+                    </span>
                     <span style={styles.postCreator}>@{p.user}</span>
                   </div>
                   <p style={styles.postTitle}>{p.title || '(no title)'}</p>
                   <div style={styles.postMetrics}>
                     <span>❤️ {fmtNum(p.liked_count)}</span>
-                    <span>⭐ {fmtNum(p.collected_count)}</span>
                     <span>💬 {fmtNum(p.comment_count)}</span>
+                    {p.play_count ? <span>▶ {fmtNum(p.play_count)}</span> : <span>⭐ {fmtNum(p.collected_count)}</span>}
                   </div>
                 </div>
               ))}
@@ -716,7 +746,6 @@ function ReportScreen({
           </section>
         )}
 
-        {/* Footer */}
         <footer style={styles.reportFooter}>
           <LensLogo size={20} />
           <span>RedLens · Powered by <strong>mimo-v2.5</strong> · For research and learning only</span>
@@ -752,21 +781,25 @@ export default function App() {
   const [loadStage, setLoadStage] = useState<LoadStage>('crawling')
   const [loadMessage, setLoadMessage] = useState('')
   const [keyword, setKeyword] = useState('')
+  const [platform, setPlatform] = useState<Platform>('xhs')
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
-  const handleAnalyze = useCallback((kw: string, cookie: string, maxNotes: number) => {
+  const handleAnalyze = useCallback((kw: string, cookie: string, maxNotes: number, plt: Platform) => {
+    const platformLabel = PLATFORMS.find(p => p.id === plt)?.label ?? plt
     setKeyword(kw)
+    setPlatform(plt)
     setAppState('loading')
     setLoadStage('crawling')
-    setLoadMessage(`Searching XHS for "${kw}"…`)
+    setLoadMessage(`Searching ${platformLabel} for "${kw}"…`)
     setError(null)
 
     const params = new URLSearchParams({
       keyword: kw,
       cookie,
       max_notes: String(maxNotes),
+      platform: plt,
     })
     const es = new EventSource(`/api/analyze?${params}`)
     esRef.current = es
@@ -778,8 +811,7 @@ export default function App() {
     })
 
     es.addEventListener('done', (e: MessageEvent) => {
-      const data: AnalysisResult = JSON.parse(e.data)
-      setResult(data)
+      setResult(JSON.parse(e.data) as AnalysisResult)
       setAppState('report')
       es.close()
     })
@@ -788,9 +820,7 @@ export default function App() {
       try {
         const data = JSON.parse(e.data)
         setError(data.message || 'Something went wrong.')
-        if (data.code === 'auth') {
-          clearCookie() // session expired — force re-scan
-        }
+        if (data.code === 'auth') clearSession(plt)
       } catch {
         setError('Connection error. Please try again.')
       }
@@ -807,17 +837,8 @@ export default function App() {
     }
   }, [appState])
 
-  const handleCancel = useCallback(() => {
-    esRef.current?.close()
-    setAppState('setup')
-  }, [])
-
-  const handleReset = useCallback(() => {
-    esRef.current?.close()
-    setResult(null)
-    setError(null)
-    setAppState('setup')
-  }, [])
+  const handleCancel = useCallback(() => { esRef.current?.close(); setAppState('setup') }, [])
+  const handleReset = useCallback(() => { esRef.current?.close(); setResult(null); setError(null); setAppState('setup') }, [])
 
   if (appState === 'loading') {
     return (
@@ -825,6 +846,7 @@ export default function App() {
         stage={loadStage}
         message={loadMessage}
         keyword={keyword}
+        platform={platform}
         onCancel={handleCancel}
       />
     )
@@ -841,9 +863,7 @@ export default function App() {
           <LensLogo size={40} />
           <h2 style={styles.errorTitle}>Analysis Failed</h2>
           <p style={styles.errorMsg}>{error}</p>
-          <button style={styles.analyzeBtn} onClick={handleReset}>
-            Try Again
-          </button>
+          <button style={styles.analyzeBtn} onClick={handleReset}>Try Again</button>
         </div>
       </div>
     )
@@ -855,1020 +875,172 @@ export default function App() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles: Record<string, React.CSSProperties> = {
-  // Setup
-  setupWrap: {
-    minHeight: '100vh',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    padding: '0 24px 60px',
-    position: 'relative',
-  },
-  setupGlow: {
-    position: 'fixed',
-    top: '-200px',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    width: '600px',
-    height: '600px',
-    borderRadius: '50%',
-    background: 'radial-gradient(circle, rgba(229,26,40,0.08) 0%, transparent 70%)',
-    pointerEvents: 'none',
-  },
-  setupHeader: {
-    width: '100%',
-    maxWidth: '640px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '28px 0 0',
-  },
-  logoRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-  },
-  wordmark: {
-    fontFamily: 'var(--font-display)',
-    fontSize: '20px',
-    fontWeight: 700,
-    color: 'var(--text)',
-    letterSpacing: '-0.02em',
-  },
-  headerTag: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '10px',
-    letterSpacing: '0.12em',
-    color: 'var(--text-3)',
-    textTransform: 'uppercase',
-  },
-  hero: {
-    width: '100%',
-    maxWidth: '640px',
-    padding: '64px 0 48px',
-    animation: 'fade-up 0.6s ease',
-  },
-  heroTitle: {
-    fontFamily: 'var(--font-display)',
-    fontSize: 'clamp(36px, 6vw, 56px)',
-    fontWeight: 700,
-    lineHeight: 1.1,
-    letterSpacing: '-0.03em',
-    color: 'var(--text)',
-    marginBottom: '20px',
-  },
-  heroEm: {
-    fontStyle: 'italic',
-    color: 'var(--red)',
-  },
-  heroSub: {
-    fontSize: '16px',
-    lineHeight: 1.7,
-    color: 'var(--text-2)',
-    maxWidth: '480px',
-  },
-  formCard: {
-    width: '100%',
-    maxWidth: '640px',
-    background: 'var(--bg-1)',
-    border: '1px solid var(--border)',
-    borderRadius: '16px',
-    padding: '32px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '28px',
-    animation: 'fade-up 0.7s ease',
-    backdropFilter: 'blur(12px)',
-  },
-  fieldGroup: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-  },
-  label: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '10px',
-    letterSpacing: '0.14em',
-    color: 'var(--text-3)',
-    textTransform: 'uppercase',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-  },
-  input: {
-    background: 'var(--bg-2)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-sm)',
-    padding: '14px 16px',
-    color: 'var(--text)',
-    fontSize: '16px',
-    outline: 'none',
-    transition: 'border-color 0.2s',
-    width: '100%',
-  },
+  setupWrap: { minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '0 24px 60px', position: 'relative' },
+  setupGlow: { position: 'fixed', top: '-200px', left: '50%', transform: 'translateX(-50%)', width: '600px', height: '600px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(229,26,40,0.08) 0%, transparent 70%)', pointerEvents: 'none' },
+  setupHeader: { width: '100%', maxWidth: '640px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '28px 0 0' },
+  logoRow: { display: 'flex', alignItems: 'center', gap: '10px' },
+  wordmark: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.02em' },
+  headerTag: { fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.12em', color: 'var(--text-3)', textTransform: 'uppercase' as const },
+  hero: { width: '100%', maxWidth: '640px', padding: '64px 0 48px', animation: 'fade-up 0.6s ease' },
+  heroTitle: { fontFamily: 'var(--font-display)', fontSize: 'clamp(36px, 6vw, 56px)', fontWeight: 700, lineHeight: 1.1, letterSpacing: '-0.03em', color: 'var(--text)', marginBottom: '20px' },
+  heroEm: { fontStyle: 'italic', color: 'var(--red)' },
+  heroSub: { fontSize: '16px', lineHeight: 1.7, color: 'var(--text-2)', maxWidth: '480px' },
 
-  // Session / QR login
-  sessionRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    background: 'var(--bg-2)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-sm)',
-    padding: '12px 16px',
-  },
-  sessionBadge: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-  },
-  sessionDot: {
-    display: 'block',
-    width: '8px',
-    height: '8px',
-    borderRadius: '50%',
-    background: 'var(--green)',
-    flexShrink: 0,
-    boxShadow: '0 0 6px rgba(62,207,142,0.6)',
-  },
-  sessionName: {
-    fontSize: '14px',
-    color: 'var(--text)',
-    fontWeight: 500,
-  },
-  switchBtn: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    letterSpacing: '0.06em',
-    color: 'var(--text-3)',
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    textDecoration: 'underline',
-    padding: 0,
-  },
-  qrLoginBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    background: 'var(--bg-2)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-sm)',
-    color: 'var(--text)',
-    padding: '14px 16px',
-    fontSize: '15px',
-    fontWeight: 500,
-    cursor: 'pointer',
-    transition: 'border-color 0.2s, background 0.2s',
-    fontFamily: 'var(--font-ui)',
-    width: '100%',
-    justifyContent: 'center',
-  },
+  formCard: { width: '100%', maxWidth: '640px', background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: '16px', padding: '32px', display: 'flex', flexDirection: 'column', gap: '28px', animation: 'fade-up 0.7s ease', backdropFilter: 'blur(12px)' },
+
+  // Platform tabs
+  platformTabs: { display: 'flex', gap: '8px', padding: '4px', background: 'var(--bg-2)', borderRadius: '10px', border: '1px solid var(--border)' },
+  platformTab: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px 16px', borderRadius: '7px', border: 'none', background: 'transparent', color: 'var(--text-2)', fontSize: '14px', fontWeight: 500, cursor: 'pointer', transition: 'all 0.15s', fontFamily: 'var(--font-ui)', position: 'relative' as const },
+  platformTabActive: { background: 'var(--bg-3)', color: 'var(--text)', boxShadow: '0 1px 4px rgba(0,0,0,0.3)', border: '1px solid var(--border)' },
+  platformEmoji: { fontSize: '16px' },
+  platformConnectedDot: { position: 'absolute' as const, top: '6px', right: '8px', width: '6px', height: '6px', borderRadius: '50%', background: 'var(--green)', boxShadow: '0 0 4px rgba(62,207,142,0.8)' },
+
+  fieldGroup: { display: 'flex', flexDirection: 'column', gap: '10px' },
+  label: { fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.14em', color: 'var(--text-3)', textTransform: 'uppercase' as const, display: 'flex', alignItems: 'center', gap: '8px' },
+  input: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '14px 16px', color: 'var(--text)', fontSize: '16px', outline: 'none', transition: 'border-color 0.2s', width: '100%' },
+
+  sessionRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '12px 16px' },
+  sessionBadge: { display: 'flex', alignItems: 'center', gap: '8px' },
+  sessionDot: { display: 'block', width: '8px', height: '8px', borderRadius: '50%', background: 'var(--green)', flexShrink: 0, boxShadow: '0 0 6px rgba(62,207,142,0.6)' },
+  sessionName: { fontSize: '14px', color: 'var(--text)', fontWeight: 500 },
+  switchBtn: { fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.06em', color: 'var(--text-3)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 },
+
+  qrLoginBtn: { display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '14px 16px', fontSize: '15px', fontWeight: 500, cursor: 'pointer', transition: 'border-color 0.2s, background 0.2s', fontFamily: 'var(--font-ui)', width: '100%', justifyContent: 'center' },
+
+  // Douyin cookie section
+  cookieSection: { display: 'flex', flexDirection: 'column', gap: '0', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' },
+  cookieToggle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'var(--bg-2)', border: 'none', cursor: 'pointer', color: 'var(--text)', fontSize: '15px', fontFamily: 'var(--font-ui)', fontWeight: 500 },
+  cookieBody: { padding: '16px', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column', gap: '12px', borderTop: '1px solid var(--border)' },
+  cookieInstructions: { fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.7 },
+  cookieTextarea: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '12px', color: 'var(--text)', fontSize: '13px', fontFamily: 'var(--font-mono)', resize: 'vertical' as const, outline: 'none', width: '100%' },
+  cookieSaveBtn: { background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '10px 20px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui)', alignSelf: 'flex-end' },
 
   // QR Modal
-  qrOverlay: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.7)',
-    backdropFilter: 'blur(8px)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 999,
-    padding: '24px',
-    animation: 'fade-up 0.2s ease',
-  },
-  qrModal: {
-    position: 'relative',
-    background: 'var(--bg-1)',
-    border: '1px solid var(--border)',
-    borderRadius: '20px',
-    padding: '32px',
-    width: '100%',
-    maxWidth: '360px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '24px',
-    boxShadow: '0 24px 80px rgba(0,0,0,0.5)',
-  },
-  qrClose: {
-    position: 'absolute',
-    top: '16px',
-    right: '16px',
-    background: 'var(--bg-2)',
-    border: '1px solid var(--border)',
-    borderRadius: '6px',
-    color: 'var(--text-3)',
-    cursor: 'pointer',
-    padding: '4px 8px',
-    fontSize: '13px',
-    lineHeight: 1,
-    fontFamily: 'var(--font-mono)',
-  },
-  qrHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-  },
-  qrTitle: {
-    fontFamily: 'var(--font-display)',
-    fontSize: '20px',
-    fontWeight: 700,
-    letterSpacing: '-0.02em',
-    color: 'var(--text)',
-  },
-  qrSpinner: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '16px',
-    padding: '24px 0',
-  },
-  qrBody: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '16px',
-  },
-  qrImageWrap: {
-    background: '#fff',
-    borderRadius: '12px',
-    padding: '12px',
-    display: 'inline-flex',
-    boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-  },
-  qrImage: {
-    width: '200px',
-    height: '200px',
-    display: 'block',
-  },
-  qrStatusMsg: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '12px',
-    color: 'var(--text-2)',
-    textAlign: 'center',
-    letterSpacing: '0.04em',
-  },
-  qrHint: {
-    fontSize: '13px',
-    color: 'var(--text-3)',
-    textAlign: 'center',
-    lineHeight: 1.5,
-  },
-  qrSuccess: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '12px',
-    padding: '24px 0',
-  },
-  qrSuccessIcon: {
-    width: '52px',
-    height: '52px',
-    borderRadius: '50%',
-    background: 'rgba(62,207,142,0.12)',
-    border: '2px solid var(--green)',
-    color: 'var(--green)',
-    fontSize: '24px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontWeight: 700,
-  },
-  qrSuccessText: {
-    fontSize: '15px',
-    color: 'var(--text)',
-    fontWeight: 500,
-  },
-  qrErrorMsg: {
-    fontSize: '14px',
-    color: 'rgba(229,26,40,0.9)',
-    textAlign: 'center',
-    lineHeight: 1.5,
-  },
-  qrRetryBtn: {
-    background: 'var(--bg-2)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-sm)',
-    color: 'var(--text)',
-    padding: '10px 20px',
-    fontSize: '14px',
-    cursor: 'pointer',
-    fontFamily: 'var(--font-ui)',
-  },
+  qrOverlay: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, padding: '24px', animation: 'fade-up 0.2s ease' },
+  qrModal: { position: 'relative' as const, background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '360px', display: 'flex', flexDirection: 'column', gap: '24px', boxShadow: '0 24px 80px rgba(0,0,0,0.5)' },
+  qrClose: { position: 'absolute' as const, top: '16px', right: '16px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-3)', cursor: 'pointer', padding: '4px 8px', fontSize: '13px', lineHeight: 1, fontFamily: 'var(--font-mono)' },
+  qrHeader: { display: 'flex', alignItems: 'center', gap: '12px' },
+  qrTitle: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--text)' },
+  qrSpinner: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', padding: '24px 0' },
+  qrBody: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' },
+  qrImageWrap: { background: '#fff', borderRadius: '12px', padding: '12px', display: 'inline-flex', boxShadow: '0 4px 20px rgba(0,0,0,0.15)' },
+  qrImage: { width: '200px', height: '200px', display: 'block' },
+  qrStatusMsg: { fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-2)', textAlign: 'center' as const, letterSpacing: '0.04em' },
+  qrHint: { fontSize: '13px', color: 'var(--text-3)', textAlign: 'center' as const, lineHeight: 1.5 },
+  qrSuccess: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '24px 0' },
+  qrSuccessIcon: { width: '52px', height: '52px', borderRadius: '50%', background: 'rgba(62,207,142,0.12)', border: '2px solid var(--green)', color: 'var(--green)', fontSize: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 },
+  qrSuccessText: { fontSize: '15px', color: 'var(--text)', fontWeight: 500 },
+  qrErrorMsg: { fontSize: '14px', color: 'rgba(229,26,40,0.9)', textAlign: 'center' as const, lineHeight: 1.5 },
+  qrRetryBtn: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '10px 20px', fontSize: '14px', cursor: 'pointer', fontFamily: 'var(--font-ui)' },
 
-  slider: {
-    width: '100%',
-    accentColor: 'var(--red)',
-    cursor: 'pointer',
-    height: '4px',
-  },
-  sliderVal: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '14px',
-    color: 'var(--red)',
-    fontWeight: 600,
-    marginLeft: '4px',
-  },
-  sliderLabels: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    fontSize: '11px',
-    color: 'var(--text-3)',
-  },
-  analyzeBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '10px',
-    background: 'var(--red)',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 'var(--radius-sm)',
-    padding: '16px 24px',
-    fontSize: '16px',
-    fontWeight: 600,
-    cursor: 'pointer',
-    transition: 'opacity 0.2s, transform 0.1s',
-    fontFamily: 'var(--font-ui)',
-    letterSpacing: '-0.01em',
-  },
-  analyzeBtnDisabled: {
-    opacity: 0.35,
-    cursor: 'not-allowed',
-  },
-  cookieHint: {
-    fontSize: '13px',
-    color: 'var(--text-3)',
-    textAlign: 'center',
-  },
-  setupFooter: {
-    marginTop: '40px',
-    fontSize: '12px',
-    color: 'var(--text-3)',
-    fontFamily: 'var(--font-mono)',
-    textAlign: 'center',
-  },
+  slider: { width: '100%', accentColor: 'var(--red)', cursor: 'pointer', height: '4px' },
+  sliderVal: { fontFamily: 'var(--font-mono)', fontSize: '14px', color: 'var(--red)', fontWeight: 600, marginLeft: '4px' },
+  sliderLabels: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-3)' },
+  analyzeBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', padding: '16px 24px', fontSize: '16px', fontWeight: 600, cursor: 'pointer', transition: 'opacity 0.2s, transform 0.1s', fontFamily: 'var(--font-ui)', letterSpacing: '-0.01em' },
+  analyzeBtnDisabled: { opacity: 0.35, cursor: 'not-allowed' },
+  cookieHint: { fontSize: '13px', color: 'var(--text-3)', textAlign: 'center' as const },
+  setupFooter: { marginTop: '40px', fontSize: '12px', color: 'var(--text-3)', fontFamily: 'var(--font-mono)', textAlign: 'center' as const },
 
   // Loading
-  loadWrap: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  loadGlow: {
-    position: 'fixed',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    width: '500px',
-    height: '500px',
-    borderRadius: '50%',
-    background: 'radial-gradient(circle, rgba(229,26,40,0.1) 0%, transparent 65%)',
-    animation: 'pulse-ring 3s ease-in-out infinite',
-    pointerEvents: 'none',
-  },
-  loadContent: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '20px',
-    padding: '40px',
-    textAlign: 'center',
-  },
-  loadLogoWrap: {
-    position: 'relative',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  loadRing: {
-    position: 'absolute',
-    width: '80px',
-    height: '80px',
-    borderRadius: '50%',
-    border: '1px solid rgba(229,26,40,0.3)',
-    animation: 'pulse-ring 2s ease-in-out infinite',
-  },
-  loadStage: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    fontFamily: 'var(--font-mono)',
-    fontSize: '12px',
-    letterSpacing: '0.08em',
-  },
-  loadStageActive: {
-    color: 'var(--red)',
-    fontWeight: 600,
-  },
-  loadStageDone: {
-    color: 'var(--green)',
-    fontWeight: 600,
-  },
-  loadStagePending: {
-    color: 'var(--text-3)',
-  },
-  loadArrow: {
-    color: 'var(--text-3)',
-  },
-  loadKeyword: {
-    fontFamily: 'var(--font-display)',
-    fontSize: '28px',
-    fontWeight: 700,
-    fontStyle: 'italic',
-    color: 'var(--text)',
-    letterSpacing: '-0.02em',
-  },
-  loadMessage: {
-    fontSize: '14px',
-    color: 'var(--text-2)',
-    fontFamily: 'var(--font-mono)',
-  },
-  loadDots: {
-    display: 'flex',
-    gap: '6px',
-  },
-  loadDot: {
-    display: 'inline-block',
-    width: '6px',
-    height: '6px',
-    borderRadius: '50%',
-    background: 'var(--red)',
-    animation: 'pulse-ring 1.2s ease-in-out infinite',
-    opacity: 0.6,
-  },
-  cancelBtn: {
-    marginTop: '12px',
-    color: 'var(--text-3)',
-    fontSize: '13px',
-    textDecoration: 'underline',
-    cursor: 'pointer',
-    background: 'none',
-    border: 'none',
-    fontFamily: 'var(--font-ui)',
-  },
+  loadWrap: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' as const, overflow: 'hidden' },
+  loadGlow: { position: 'fixed' as const, top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: '500px', height: '500px', borderRadius: '50%', background: 'radial-gradient(circle, rgba(229,26,40,0.1) 0%, transparent 65%)', animation: 'pulse-ring 3s ease-in-out infinite', pointerEvents: 'none' },
+  loadContent: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px', padding: '40px', textAlign: 'center' as const },
+  loadLogoWrap: { position: 'relative' as const, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  loadRing: { position: 'absolute' as const, width: '80px', height: '80px', borderRadius: '50%', border: '1px solid rgba(229,26,40,0.3)', animation: 'pulse-ring 2s ease-in-out infinite' },
+  loadStage: { display: 'flex', alignItems: 'center', gap: '12px', fontFamily: 'var(--font-mono)', fontSize: '12px', letterSpacing: '0.08em' },
+  loadStageActive: { color: 'var(--red)', fontWeight: 600 },
+  loadStageDone: { color: 'var(--green)', fontWeight: 600 },
+  loadStagePending: { color: 'var(--text-3)' },
+  loadArrow: { color: 'var(--text-3)' },
+  loadKeyword: { fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 700, fontStyle: 'italic', color: 'var(--text)', letterSpacing: '-0.02em' },
+  loadMessage: { fontSize: '14px', color: 'var(--text-2)', fontFamily: 'var(--font-mono)' },
+  loadDots: { display: 'flex', gap: '6px' },
+  loadDot: { display: 'inline-block', width: '6px', height: '6px', borderRadius: '50%', background: 'var(--red)', animation: 'pulse-ring 1.2s ease-in-out infinite', opacity: 0.6 },
+  cancelBtn: { marginTop: '12px', color: 'var(--text-3)', fontSize: '13px', textDecoration: 'underline', cursor: 'pointer', background: 'none', border: 'none', fontFamily: 'var(--font-ui)' },
 
   // Report
-  reportWrap: {
-    minHeight: '100vh',
-    background: 'var(--bg)',
-  },
-  reportNav: {
-    position: 'sticky',
-    top: 0,
-    zIndex: 100,
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    padding: '14px 24px',
-    background: 'rgba(8,8,9,0.92)',
-    backdropFilter: 'blur(16px)',
-    borderBottom: '1px solid var(--border)',
-  },
-  navLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    flexShrink: 0,
-  },
-  navBrand: {
-    fontFamily: 'var(--font-display)',
-    fontWeight: 700,
-    fontSize: '16px',
-    letterSpacing: '-0.02em',
-  },
-  navKeyword: {
-    flex: 1,
-    fontFamily: 'var(--font-display)',
-    fontSize: '14px',
-    fontStyle: 'italic',
-    color: 'var(--text-2)',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  navNew: {
-    background: 'var(--bg-3)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-sm)',
-    color: 'var(--text)',
-    padding: '7px 14px',
-    fontSize: '13px',
-    fontWeight: 600,
-    cursor: 'pointer',
-    flexShrink: 0,
-    fontFamily: 'var(--font-ui)',
-  },
-  reportContent: {
-    maxWidth: '900px',
-    margin: '0 auto',
-    padding: '0 24px 80px',
-  },
-  reportHero: {
-    padding: '60px 0 40px',
-    animation: 'fade-up 0.5s ease',
-  },
-  reportMeta: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    marginBottom: '20px',
-    flexWrap: 'wrap',
-  },
-  reportMetaItem: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '12px',
-    color: 'var(--text-3)',
-  },
-  reportMetaDot: {
-    color: 'var(--text-3)',
-  },
-  reportMetaModel: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '12px',
-    color: 'var(--gold)',
-    background: 'rgba(201,169,110,0.1)',
-    padding: '2px 8px',
-    borderRadius: '4px',
-  },
-  reportTitle: {
-    fontFamily: 'var(--font-display)',
-    fontSize: 'clamp(32px, 5vw, 52px)',
-    fontWeight: 700,
-    lineHeight: 1.1,
-    letterSpacing: '-0.03em',
-    color: 'var(--text)',
-    marginBottom: '20px',
-  },
-  reportTitleEm: {
-    fontStyle: 'italic',
-    color: 'var(--red)',
-  },
-  reportSummary: {
-    fontSize: '16px',
-    lineHeight: 1.8,
-    color: 'var(--text-2)',
-    maxWidth: '680px',
-    borderLeft: '2px solid var(--red)',
-    paddingLeft: '20px',
-  },
-  section: {
-    marginBottom: '64px',
-    animation: 'fade-up 0.5s ease',
-  },
-  sectionHeader: {
-    marginBottom: '24px',
-  },
-  sectionLabel: {
-    display: 'block',
-    fontFamily: 'var(--font-mono)',
-    fontSize: '10px',
-    letterSpacing: '0.16em',
-    color: 'var(--text-3)',
-    marginBottom: '6px',
-  },
-  sectionTitle: {
-    fontFamily: 'var(--font-display)',
-    fontSize: '28px',
-    fontWeight: 700,
-    letterSpacing: '-0.02em',
-    color: 'var(--text)',
-  },
+  reportWrap: { minHeight: '100vh', background: 'var(--bg)' },
+  reportNav: { position: 'sticky' as const, top: 0, zIndex: 100, display: 'flex', alignItems: 'center', gap: '12px', padding: '14px 24px', background: 'rgba(8,8,9,0.92)', backdropFilter: 'blur(16px)', borderBottom: '1px solid var(--border)' },
+  navLeft: { display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 },
+  navBrand: { fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '16px', letterSpacing: '-0.02em' },
+  navKeyword: { flex: 1, fontFamily: 'var(--font-display)', fontSize: '14px', fontStyle: 'italic', color: 'var(--text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  navNew: { background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '7px 14px', fontSize: '13px', fontWeight: 600, cursor: 'pointer', flexShrink: 0, fontFamily: 'var(--font-ui)' },
+  reportContent: { maxWidth: '900px', margin: '0 auto', padding: '0 24px 80px' },
+  reportHero: { padding: '60px 0 40px', animation: 'fade-up 0.5s ease' },
+  reportMeta: { display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' as const },
+  reportMetaItem: { fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-3)' },
+  reportMetaDot: { color: 'var(--text-3)' },
+  reportMetaModel: { fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--gold)', background: 'rgba(201,169,110,0.1)', padding: '2px 8px', borderRadius: '4px' },
+  reportTitle: { fontFamily: 'var(--font-display)', fontSize: 'clamp(32px, 5vw, 52px)', fontWeight: 700, lineHeight: 1.1, letterSpacing: '-0.03em', color: 'var(--text)', marginBottom: '20px' },
+  reportTitleEm: { fontStyle: 'italic', color: 'var(--red)' },
+  reportSummary: { fontSize: '16px', lineHeight: 1.8, color: 'var(--text-2)', maxWidth: '680px', borderLeft: '2px solid var(--red)', paddingLeft: '20px' },
+  section: { marginBottom: '64px', animation: 'fade-up 0.5s ease' },
+  sectionHeader: { marginBottom: '24px' },
+  sectionLabel: { display: 'block', fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.16em', color: 'var(--text-3)', marginBottom: '6px' },
+  sectionTitle: { fontFamily: 'var(--font-display)', fontSize: '28px', fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--text)' },
 
-  // Metrics
-  metricsRow: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-    gap: '12px',
-    marginBottom: '16px',
-  },
-  metricCard: {
-    background: 'var(--bg-1)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
-    padding: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
-  },
-  metricIcon: {
-    fontSize: '18px',
-  },
-  metricValue: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '28px',
-    fontWeight: 500,
-    color: 'var(--text)',
-    letterSpacing: '-0.02em',
-  },
-  metricLabel: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '10px',
-    letterSpacing: '0.1em',
-    color: 'var(--text-3)',
-    textTransform: 'uppercase',
-  },
-  engagementInsight: {
-    fontSize: '13px',
-    color: 'var(--text-2)',
-    fontStyle: 'italic',
-    paddingLeft: '12px',
-    borderLeft: '1px solid var(--border)',
-  },
+  metricsRow: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', marginBottom: '16px' },
+  metricCard: { background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '4px' },
+  metricIcon: { fontSize: '18px' },
+  metricValue: { fontFamily: 'var(--font-mono)', fontSize: '28px', fontWeight: 500, color: 'var(--text)', letterSpacing: '-0.02em' },
+  metricLabel: { fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.1em', color: 'var(--text-3)', textTransform: 'uppercase' as const },
+  engagementInsight: { fontSize: '13px', color: 'var(--text-2)', fontStyle: 'italic', paddingLeft: '12px', borderLeft: '1px solid var(--border)' },
 
-  // Patterns
-  patternsScroll: {
-    display: 'flex',
-    gap: '16px',
-    overflowX: 'auto',
-    paddingBottom: '8px',
-    scrollSnapType: 'x mandatory',
-  },
-  patternCard: {
-    background: 'var(--bg-1)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
-    padding: '24px',
-    minWidth: '260px',
-    maxWidth: '320px',
-    flexShrink: 0,
-    scrollSnapAlign: 'start',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-    transition: 'border-color 0.2s',
-  },
-  patternNum: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    color: 'var(--red)',
-    letterSpacing: '0.1em',
-    fontWeight: 600,
-  },
-  patternTitle: {
-    fontFamily: 'var(--font-display)',
-    fontSize: '18px',
-    fontWeight: 700,
-    color: 'var(--text)',
-    lineHeight: 1.3,
-  },
-  patternFreq: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    color: 'var(--gold)',
-    background: 'rgba(201,169,110,0.1)',
-    padding: '2px 8px',
-    borderRadius: '4px',
-    alignSelf: 'flex-start',
-  },
-  patternExample: {
-    fontSize: '13px',
-    color: 'var(--text-3)',
-    fontStyle: 'italic',
-    lineHeight: 1.5,
-  },
-  patternWhy: {
-    fontSize: '13px',
-    color: 'var(--text-2)',
-    lineHeight: 1.6,
-    marginTop: '4px',
-  },
+  patternsScroll: { display: 'flex', gap: '16px', overflowX: 'auto' as const, paddingBottom: '8px', scrollSnapType: 'x mandatory' },
+  patternCard: { background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '24px', minWidth: '260px', maxWidth: '320px', flexShrink: 0, scrollSnapAlign: 'start', display: 'flex', flexDirection: 'column', gap: '8px' },
+  patternNum: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--red)', letterSpacing: '0.1em', fontWeight: 600 },
+  patternTitle: { fontFamily: 'var(--font-display)', fontSize: '18px', fontWeight: 700, color: 'var(--text)', lineHeight: 1.3 },
+  patternFreq: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--gold)', background: 'rgba(201,169,110,0.1)', padding: '2px 8px', borderRadius: '4px', alignSelf: 'flex-start' },
+  patternExample: { fontSize: '13px', color: 'var(--text-3)', fontStyle: 'italic', lineHeight: 1.5 },
+  patternWhy: { fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.6, marginTop: '4px' },
 
-  // Insights
-  insightGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-    gap: '16px',
-  },
-  insightCard: {
-    background: 'var(--bg-1)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
-    padding: '24px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-  },
-  insightCardTitle: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    letterSpacing: '0.1em',
-    color: 'var(--text-3)',
-    textTransform: 'uppercase',
-    paddingBottom: '8px',
-    borderBottom: '1px solid var(--border)',
-  },
-  formula: {
-    display: 'flex',
-    gap: '10px',
-    alignItems: 'flex-start',
-    fontSize: '14px',
-    color: 'var(--text)',
-    lineHeight: 1.5,
-  },
-  formulaNum: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    color: 'var(--red)',
-    fontWeight: 700,
-    flexShrink: 0,
-    paddingTop: '2px',
-  },
-  formatItem: {
-    display: 'flex',
-    gap: '10px',
-    alignItems: 'flex-start',
-    fontSize: '14px',
-    color: 'var(--text)',
-    lineHeight: 1.5,
-  },
-  formatBullet: {
-    display: 'block',
-    width: '4px',
-    height: '4px',
-    borderRadius: '50%',
-    background: 'var(--red)',
-    marginTop: '8px',
-    flexShrink: 0,
-  },
-  insightText: {
-    fontSize: '14px',
-    color: 'var(--text-2)',
-    lineHeight: 1.6,
-  },
-  pillRow: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '6px',
-  },
-  pill: {
-    background: 'var(--red-dim)',
-    border: '1px solid rgba(229,26,40,0.2)',
-    color: 'var(--text)',
-    padding: '4px 12px',
-    borderRadius: '100px',
-    fontSize: '13px',
-    fontFamily: 'var(--font-mono)',
-  },
+  insightGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' },
+  insightCard: { background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  insightCardTitle: { fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.1em', color: 'var(--text-3)', textTransform: 'uppercase' as const, paddingBottom: '8px', borderBottom: '1px solid var(--border)' },
+  formula: { display: 'flex', gap: '10px', alignItems: 'flex-start', fontSize: '14px', color: 'var(--text)', lineHeight: 1.5 },
+  formulaNum: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--red)', fontWeight: 700, flexShrink: 0, paddingTop: '2px' },
+  formatItem: { display: 'flex', gap: '10px', alignItems: 'flex-start', fontSize: '14px', color: 'var(--text)', lineHeight: 1.5 },
+  formatBullet: { display: 'block', width: '4px', height: '4px', borderRadius: '50%', background: 'var(--red)', marginTop: '8px', flexShrink: 0 },
+  insightText: { fontSize: '14px', color: 'var(--text-2)', lineHeight: 1.6 },
+  pillRow: { display: 'flex', flexWrap: 'wrap' as const, gap: '6px' },
+  pill: { background: 'var(--red-dim)', border: '1px solid rgba(229,26,40,0.2)', color: 'var(--text)', padding: '4px 12px', borderRadius: '100px', fontSize: '13px', fontFamily: 'var(--font-mono)' },
 
-  // Comments
-  commentGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-    gap: '16px',
-  },
-  commentCard: {
-    background: 'var(--bg-1)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
-    padding: '24px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-  },
-  commentCardTitle: {
-    fontSize: '14px',
-    fontWeight: 600,
-    color: 'var(--text)',
-    paddingBottom: '8px',
-    borderBottom: '1px solid var(--border)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-  },
-  commentItem: {
-    display: 'flex',
-    gap: '8px',
-    fontSize: '14px',
-    color: 'var(--text-2)',
-    lineHeight: 1.5,
-    alignItems: 'flex-start',
-  },
-  commentBullet: {
-    color: 'var(--red)',
-    flexShrink: 0,
-    fontWeight: 700,
-  },
-  sentimentText: {
-    fontSize: '14px',
-    color: 'var(--text-2)',
-    lineHeight: 1.7,
-    fontStyle: 'italic',
-  },
+  commentGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' },
+  commentCard: { background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '24px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  commentCardTitle: { fontSize: '14px', fontWeight: 600, color: 'var(--text)', paddingBottom: '8px', borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '8px' },
+  commentItem: { display: 'flex', gap: '8px', fontSize: '14px', color: 'var(--text-2)', lineHeight: 1.5, alignItems: 'flex-start' },
+  commentBullet: { color: 'var(--red)', flexShrink: 0, fontWeight: 700 },
+  sentimentText: { fontSize: '14px', color: 'var(--text-2)', lineHeight: 1.7, fontStyle: 'italic' },
 
-  // Angles
-  anglesGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-    gap: '16px',
-  },
-  angleCard: {
-    background: 'linear-gradient(135deg, var(--bg-1) 0%, rgba(229,26,40,0.03) 100%)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
-    padding: '28px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-    transition: 'border-color 0.2s',
-  },
-  angleNum: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '12px',
-    color: 'var(--red)',
-    fontWeight: 700,
-    letterSpacing: '0.1em',
-  },
-  angleTitle: {
-    fontFamily: 'var(--font-display)',
-    fontSize: '20px',
-    fontWeight: 700,
-    color: 'var(--text)',
-    lineHeight: 1.3,
-    letterSpacing: '-0.01em',
-  },
-  angleDivider: {
-    height: '1px',
-    background: 'var(--border)',
-  },
-  angleRationale: {
-    fontSize: '14px',
-    color: 'var(--text-2)',
-    lineHeight: 1.6,
-  },
-  angleDiff: {
-    background: 'var(--bg-2)',
-    borderRadius: 'var(--radius-sm)',
-    padding: '12px',
-    fontSize: '13px',
-    color: 'var(--text-2)',
-    lineHeight: 1.5,
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '6px',
-  },
-  angleDiffLabel: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '10px',
-    letterSpacing: '0.1em',
-    color: 'var(--gold)',
-    textTransform: 'uppercase',
-  },
+  anglesGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' },
+  angleCard: { background: 'linear-gradient(135deg, var(--bg-1) 0%, rgba(229,26,40,0.03) 100%)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '28px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  angleNum: { fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--red)', fontWeight: 700, letterSpacing: '0.1em' },
+  angleTitle: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: 700, color: 'var(--text)', lineHeight: 1.3, letterSpacing: '-0.01em' },
+  angleDivider: { height: '1px', background: 'var(--border)' },
+  angleRationale: { fontSize: '14px', color: 'var(--text-2)', lineHeight: 1.6 },
+  angleDiff: { background: 'var(--bg-2)', borderRadius: 'var(--radius-sm)', padding: '12px', fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: '6px' },
+  angleDiffLabel: { fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.1em', color: 'var(--gold)', textTransform: 'uppercase' as const },
 
-  // Hooks
-  hooksCol: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '10px',
-  },
-  hookCard: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '16px',
-    background: 'var(--bg-1)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
-    padding: '18px 20px',
-    transition: 'border-color 0.2s',
-  },
-  hookNum: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    color: 'var(--text-3)',
-    flexShrink: 0,
-    width: '24px',
-  },
-  hookText: {
-    flex: 1,
-    fontSize: '15px',
-    color: 'var(--text)',
-    lineHeight: 1.5,
-  },
-  copyBtn: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    letterSpacing: '0.08em',
-    color: 'var(--text-3)',
-    background: 'var(--bg-2)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-sm)',
-    padding: '6px 12px',
-    cursor: 'pointer',
-    flexShrink: 0,
-    transition: 'all 0.2s',
-    textTransform: 'uppercase',
-  },
-  copyBtnDone: {
-    color: 'var(--green)',
-    borderColor: 'rgba(62,207,142,0.3)',
-    background: 'rgba(62,207,142,0.08)',
-  },
+  hooksCol: { display: 'flex', flexDirection: 'column', gap: '10px' },
+  hookCard: { display: 'flex', alignItems: 'center', gap: '16px', background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '18px 20px' },
+  hookNum: { fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-3)', flexShrink: 0, width: '24px' },
+  hookText: { flex: 1, fontSize: '15px', color: 'var(--text)', lineHeight: 1.5 },
+  copyBtn: { fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.08em', color: 'var(--text-3)', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '6px 12px', cursor: 'pointer', flexShrink: 0, transition: 'all 0.2s', textTransform: 'uppercase' as const },
+  copyBtnDone: { color: 'var(--green)', borderColor: 'rgba(62,207,142,0.3)', background: 'rgba(62,207,142,0.08)' },
 
-  // Posts grid
-  postsGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-    gap: '12px',
-  },
-  postCard: {
-    background: 'var(--bg-1)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius)',
-    padding: '16px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-  },
-  postHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  postType: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '10px',
-    color: 'var(--text-3)',
-  },
-  postCreator: {
-    fontFamily: 'var(--font-mono)',
-    fontSize: '10px',
-    color: 'var(--text-3)',
-    maxWidth: '100px',
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  postTitle: {
-    fontSize: '13px',
-    color: 'var(--text)',
-    lineHeight: 1.4,
-    flex: 1,
-    display: '-webkit-box',
-    WebkitLineClamp: 3,
-    WebkitBoxOrient: 'vertical',
-    overflow: 'hidden',
-  } as React.CSSProperties,
-  postMetrics: {
-    display: 'flex',
-    gap: '10px',
-    fontFamily: 'var(--font-mono)',
-    fontSize: '11px',
-    color: 'var(--text-3)',
-    flexWrap: 'wrap',
-  },
+  postsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' },
+  postCard: { background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' },
+  postHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
+  postType: { fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--text-3)' },
+  postCreator: { fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--text-3)', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },
+  postTitle: { fontSize: '13px', color: 'var(--text)', lineHeight: 1.4, flex: 1, display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as React.CSSProperties,
+  postMetrics: { display: 'flex', gap: '10px', fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-3)', flexWrap: 'wrap' as const },
 
-  // Error
-  errorWrap: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '24px',
-  },
-  errorCard: {
-    maxWidth: '400px',
-    width: '100%',
-    background: 'var(--bg-1)',
-    border: '1px solid rgba(229,26,40,0.2)',
-    borderRadius: '16px',
-    padding: '40px',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: '16px',
-    textAlign: 'center',
-  },
-  errorTitle: {
-    fontFamily: 'var(--font-display)',
-    fontSize: '24px',
-    fontWeight: 700,
-    color: 'var(--text)',
-  },
-  errorMsg: {
-    fontSize: '14px',
-    color: 'var(--text-2)',
-    lineHeight: 1.6,
-  },
+  errorWrap: { minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' },
+  errorCard: { maxWidth: '400px', width: '100%', background: 'var(--bg-1)', border: '1px solid rgba(229,26,40,0.2)', borderRadius: '16px', padding: '40px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', textAlign: 'center' as const },
+  errorTitle: { fontFamily: 'var(--font-display)', fontSize: '24px', fontWeight: 700, color: 'var(--text)' },
+  errorMsg: { fontSize: '14px', color: 'var(--text-2)', lineHeight: 1.6 },
 
-  // Report footer
-  reportFooter: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    padding: '24px 0',
-    borderTop: '1px solid var(--border)',
-    fontSize: '12px',
-    color: 'var(--text-3)',
-    fontFamily: 'var(--font-mono)',
-    flexWrap: 'wrap',
-  },
-  tokenMeta: {
-    marginLeft: 'auto',
-    fontSize: '11px',
-    color: 'var(--text-3)',
-  },
+  reportFooter: { display: 'flex', alignItems: 'center', gap: '10px', padding: '24px 0', borderTop: '1px solid var(--border)', fontSize: '12px', color: 'var(--text-3)', fontFamily: 'var(--font-mono)', flexWrap: 'wrap' as const },
+  tokenMeta: { marginLeft: 'auto', fontSize: '11px', color: 'var(--text-3)' },
 }
