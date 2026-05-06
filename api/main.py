@@ -202,10 +202,25 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platfor
 
 _here = Path(os.path.abspath(__file__)).parent
 frontend_dist = _here / "frontend" / "dist"
+extension_zip = _here / "redlens-extension.zip"
 logger.info("Frontend dist: %s (exists=%s)", frontend_dist, frontend_dist.exists())
+logger.info("Extension zip: %s (exists=%s)", extension_zip, extension_zip.exists())
 
 if (frontend_dist / "assets").exists():
     app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+
+
+@app.get("/extension.zip")
+async def serve_extension_zip():
+    """Self-host the Chrome extension zip so users in China can download it
+    without going through GitHub."""
+    if extension_zip.exists():
+        return FileResponse(
+            str(extension_zip),
+            media_type="application/zip",
+            filename="redlens-extension.zip",
+        )
+    raise HTTPException(404, "Extension zip not built")
 
 
 @app.get("/")
