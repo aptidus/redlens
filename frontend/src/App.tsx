@@ -275,6 +275,22 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
 }) {
   const [showPaste, setShowPaste] = useState(false)
   const [input, setInput] = useState('')
+  const [validationError, setValidationError] = useState('')
+
+  const handleSave = () => {
+    const cookie = input.trim()
+    if (!cookie.includes('web_session=')) {
+      setValidationError('Missing web_session cookie. XHS marks it as httpOnly so a bookmarklet can\'t read it — you must use the Network tab method below.')
+      return
+    }
+    if (!cookie.includes('a1=')) {
+      setValidationError('Missing a1 cookie. Make sure you\'re logged into xiaohongshu.com and copied the full Cookie header.')
+      return
+    }
+    setValidationError('')
+    onSave(cookie)
+    setInput('')
+  }
 
   if (!showPaste) {
     return (
@@ -307,38 +323,40 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
     )
   }
 
-  // Bookmarklet that runs in the user's browser on xiaohongshu.com,
-  // copies their full cookie string to clipboard, then prompts to paste here.
-  const bookmarkletHref = `javascript:(function(){var c=document.cookie;if(!c){alert('No cookies found. Make sure you are logged in to xiaohongshu.com first.')}else{navigator.clipboard.writeText(c).then(function(){alert('Cookie copied! Go back to RedLens and paste it.')},function(){prompt('Copy this cookie string:',c)})}})();`
-
   return (
     <div style={styles.cookieSection}>
       <div style={styles.cookieBody}>
         <div style={styles.bookmarkletBox}>
-          <p style={styles.bookmarkletTitle}>Quickest way — 1-click cookie grabber:</p>
+          <p style={styles.bookmarkletTitle}>How to get your XHS cookie (Network tab method)</p>
           <ol style={styles.bookmarkletSteps}>
-            <li>Drag this button to your bookmarks bar: <a href={bookmarkletHref} style={styles.bookmarkletBtn} onClick={e => e.preventDefault()}>Get XHS Cookie</a></li>
-            <li>Log into <strong>xiaohongshu.com</strong> in your browser</li>
-            <li>Click the bookmark — it copies your cookie instantly</li>
-            <li>Paste below</li>
+            <li>Log into <strong>xiaohongshu.com</strong> in Chrome</li>
+            <li>Press <code>F12</code> → click <strong>Network</strong> tab</li>
+            <li>Reload the page (<code>Cmd/Ctrl + R</code>)</li>
+            <li>Click any request to <code>xiaohongshu.com</code> in the list</li>
+            <li>Scroll to <strong>Request Headers</strong> → find <code>cookie:</code></li>
+            <li>Right-click the value → <strong>Copy value</strong> → paste below</li>
           </ol>
+          <p style={styles.bookmarkletNote}>
+            Must include both <code>web_session=</code> and <code>a1=</code>.
+            DevTools/Application tab won't show <code>web_session</code> — only Network does.
+          </p>
         </div>
-        <p style={{ ...styles.cookieInstructions, marginTop: '8px' }}>
-          Or manually: F12 → Network → any request → Headers → copy <code>Cookie:</code> value
-        </p>
         <textarea
           style={styles.cookieTextarea}
           placeholder="a1=...; web_session=...; webId=..."
           value={input}
-          onChange={e => setInput(e.target.value)}
-          rows={3}
+          onChange={e => { setInput(e.target.value); setValidationError('') }}
+          rows={4}
         />
+        {validationError && (
+          <div style={styles.validationError}>{validationError}</div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <button style={styles.altAuthLink} onClick={() => setShowPaste(false)}>← Back to QR</button>
           <button
             style={{ ...styles.cookieSaveBtn, ...(input.trim() ? {} : styles.analyzeBtnDisabled) }}
             disabled={!input.trim()}
-            onClick={() => { onSave(input.trim()); setInput('') }}
+            onClick={handleSave}
           >
             Save Cookie
           </button>
@@ -1026,9 +1044,10 @@ const styles: Record<string, React.CSSProperties> = {
   cookieTextarea: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '12px', color: 'var(--text)', fontSize: '13px', fontFamily: 'var(--font-mono)', resize: 'vertical' as const, outline: 'none', width: '100%' },
   cookieSaveBtn: { background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '10px 20px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui)', alignSelf: 'flex-end' },
   bookmarkletBox: { background: 'rgba(229,26,40,0.05)', border: '1px solid rgba(229,26,40,0.15)', borderRadius: 'var(--radius-sm)', padding: '14px 16px' },
-  bookmarkletTitle: { fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '8px', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' },
-  bookmarkletSteps: { fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.8, paddingLeft: '18px', margin: 0 },
-  bookmarkletBtn: { display: 'inline-block', background: 'var(--red)', color: '#fff', padding: '4px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, textDecoration: 'none', cursor: 'grab', fontFamily: 'var(--font-ui)', userSelect: 'none' as const },
+  bookmarkletTitle: { fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '10px', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', textTransform: 'uppercase' as const },
+  bookmarkletSteps: { fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.9, paddingLeft: '20px', margin: 0 },
+  bookmarkletNote: { fontSize: '11px', color: 'var(--text-3)', lineHeight: 1.6, marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed rgba(229,26,40,0.15)' },
+  validationError: { padding: '10px 12px', background: 'rgba(229,26,40,0.1)', border: '1px solid rgba(229,26,40,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '13px', color: 'rgba(229,26,40,0.95)', lineHeight: 1.5 },
 
   // QR Modal
   qrOverlay: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, padding: '24px', animation: 'fade-up 0.2s ease' },

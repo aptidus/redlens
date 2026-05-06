@@ -49,7 +49,7 @@ class XHSRateLimitError(XHSAPIError):
     """Rate limited by XHS (code 300012)."""
 
 
-_AUTH_CODES = {-100, 9999, 401}
+_AUTH_CODES = {-100, -101, 9999, 401}
 _RATE_LIMIT_CODES = {300012}
 _PERMISSION_CODES = {-104}
 
