@@ -329,8 +329,8 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
         <div style={styles.bookmarkletBox}>
           <p style={styles.bookmarkletTitle}>One-click connect with the RedLens extension</p>
           <ol style={styles.bookmarkletSteps}>
-            <li>Download <a href="https://github.com/aptidus/redlens/tree/main/extension" target="_blank" rel="noreferrer" style={{ color: 'var(--red)' }}>the <code>extension/</code> folder</a> from the repo</li>
-            <li>Chrome → <code>chrome://extensions</code> → toggle <strong>Developer mode</strong> → <strong>Load unpacked</strong> → pick that folder</li>
+            <li><a href="https://github.com/aptidus/redlens/releases/download/extension-latest/redlens-extension.zip" target="_blank" rel="noreferrer" style={{ color: 'var(--red)', fontWeight: 600 }}>Download redlens-extension.zip ↓</a> and unzip it</li>
+            <li>Chrome → <code>chrome://extensions</code> → toggle <strong>Developer mode</strong> → <strong>Load unpacked</strong> → pick the unzipped folder</li>
             <li>Visit <strong>xiaohongshu.com</strong> (logged in). A red <strong>"Connect to RedLens"</strong> button appears bottom-right.</li>
             <li>Click it. RedLens opens, already connected.</li>
           </ol>

@@ -1,0 +1,61 @@
+name: Build extension zip
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'extension/**'
+      - '.github/workflows/extension-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read extension version
+        id: ver
+        run: |
+          version=$(jq -r .version extension/manifest.json)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Zip extension
+        run: |
+          cd extension
+          zip -r ../redlens-extension.zip . -x '*.DS_Store' -x '__MACOSX/*'
+          cd ..
+          ls -la redlens-extension.zip
+
+      - name: Update "extension-latest" release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: extension-latest
+          name: RedLens Cookie Connect (latest)
+          files: redlens-extension.zip
+          body: |
+            **RedLens Cookie Connect** — Chrome extension for one-click XHS cookie connect.
+
+            **Version:** `${{ steps.ver.outputs.version }}`
+            **Built from:** `${{ github.sha }}`
+
+            ## Install (~30 seconds)
+
+            1. Click **redlens-extension.zip** below to download
+            2. Unzip the file
+            3. In Chrome, open **`chrome://extensions`**
+            4. Toggle **Developer mode** on (top right)
+            5. Click **Load unpacked** → pick the unzipped folder
+
+            ## Use
+
+            1. Go to **xiaohongshu.com** in Chrome (logged in)
+            2. A red **Connect to RedLens** button appears bottom-right
+            3. Click it → RedLens opens, already authenticated
+
+            That's it. The button stays available on every XHS page.
+          make_latest: 'false'
+          prerelease: false
