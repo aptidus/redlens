@@ -12,9 +12,6 @@ WORKDIR /app
 COPY api/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Playwright + Chromium (separate layer — only re-runs when playwright version changes)
-RUN playwright install chromium --with-deps
-
 # Copy backend
 COPY api/ ./
 
