@@ -373,9 +373,16 @@ async def _scrape_keyword_http(
             note_id = item.get("id") or item.get("note_id", "")
             if not note_id:
                 continue
+            xsec_token = item.get("xsec_token", "")
+            note_url = (
+                f"https://www.xiaohongshu.com/explore/{note_id}"
+                + (f"?xsec_token={xsec_token}&xsec_source=pc_search" if xsec_token else "")
+            )
 
             note: Dict = {
                 "note_id": note_id,
+                "note_url": note_url,
+                "xsec_token": xsec_token,
                 "title": _extract_title(item),
                 "desc": _extract_desc(item),
                 "type": item.get("note_card", {}).get("type", "normal"),

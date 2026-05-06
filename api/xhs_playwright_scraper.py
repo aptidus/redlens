@@ -95,8 +95,17 @@ def _extract_note_from_item(item: Dict) -> Dict:
     cover = card.get("cover", {})
     cover_url = cover.get("url_default") or cover.get("url_pre", "")
 
+    note_id = item.get("id") or item.get("note_id", "")
+    xsec_token = item.get("xsec_token", "")
+    note_url = (
+        f"https://www.xiaohongshu.com/explore/{note_id}"
+        + (f"?xsec_token={xsec_token}&xsec_source=pc_search" if xsec_token else "")
+    ) if note_id else ""
+
     return {
-        "note_id": item.get("id") or item.get("note_id", ""),
+        "note_id": note_id,
+        "note_url": note_url,
+        "xsec_token": xsec_token,
         "title": card.get("title") or card.get("display_title", ""),
         "desc": card.get("desc", ""),
         "type": card.get("type", "normal"),

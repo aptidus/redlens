@@ -1,4 +1,13 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, createContext, useContext } from 'react'
+import { Lang, loadLang, saveLang, t as translations, LANG_LABELS } from './i18n'
+
+// ─── i18n context ─────────────────────────────────────────────────────────────
+
+type T = typeof translations.zh
+const LangContext = createContext<{ lang: Lang; T: T; setLang: (l: Lang) => void }>({
+  lang: 'zh', T: translations.zh, setLang: () => {},
+})
+const useLang = () => useContext(LangContext)
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
@@ -76,6 +85,7 @@ interface PostSummary {
   cover_url: string
   type: string
   duration?: number
+  note_url?: string
 }
 interface AnalysisMeta {
   model: string
@@ -128,9 +138,10 @@ function QRModal({ onAuthenticated, onClose }: {
   onAuthenticated: (cookie: string, username: string) => void
   onClose: () => void
 }) {
+  const { T } = useLang()
   const [qrState, setQrState] = useState<QRState>('connecting')
   const [qrImage, setQrImage] = useState('')
-  const [statusMsg, setStatusMsg] = useState('Connecting to 小红书…')
+  const [statusMsg, setStatusMsg] = useState(T.qr_connecting)
   const qrStateRef = useRef<QRState>('connecting')
 
   const setQrStateSync = (s: QRState) => { qrStateRef.current = s; setQrState(s) }
@@ -184,19 +195,19 @@ function QRModal({ onAuthenticated, onClose }: {
               <img src={qrImage} alt="小红书 QR Code" style={styles.qrImage} />
             </div>
             <p style={styles.qrStatusMsg}>{statusMsg}</p>
-            <p style={styles.qrHint}>Open 小红书 app → tap profile → Scan QR</p>
+            <p style={styles.qrHint}>{T.qr_scan_hint}</p>
           </div>
         )}
         {qrState === 'done' && (
           <div style={styles.qrSuccess}>
             <div style={styles.qrSuccessIcon}>✓</div>
-            <p style={styles.qrSuccessText}>Connected successfully!</p>
+            <p style={styles.qrSuccessText}>{T.qr_connected}</p>
           </div>
         )}
         {qrState === 'error' && (
           <div style={styles.qrBody}>
             <p style={styles.qrErrorMsg}>{statusMsg}</p>
-            <button style={styles.qrRetryBtn} onClick={onClose}>Close &amp; try again</button>
+            <button style={styles.qrRetryBtn} onClick={onClose}>{T.qr_close_retry}</button>
           </div>
         )}
       </div>
@@ -212,6 +223,7 @@ function DouyinCookieSection({ session, onSave, onClear, isExpired = false }: {
   onClear: () => void
   isExpired?: boolean
 }) {
+  const { T } = useLang()
   const [expanded, setExpanded] = useState(!session.cookie)
   const [input, setInput] = useState('')
 
@@ -220,9 +232,9 @@ function DouyinCookieSection({ session, onSave, onClear, isExpired = false }: {
       <div style={styles.sessionRow}>
         <div style={styles.sessionBadge}>
           <span style={styles.sessionDot} />
-          <span style={styles.sessionName}>{session.username || 'Douyin Connected'}</span>
+          <span style={styles.sessionName}>{session.username || T.connected}</span>
         </div>
-        <button style={styles.switchBtn} onClick={onClear}>Switch account</button>
+        <button style={styles.switchBtn} onClick={onClear}>{T.switch_account}</button>
       </div>
     )
   }
@@ -230,21 +242,19 @@ function DouyinCookieSection({ session, onSave, onClear, isExpired = false }: {
   return (
     <div style={styles.cookieSection}>
       {isExpired && (
-        <div style={styles.cookieExpiredBanner}>
-          ⚠️ Cookie expired — paste a fresh one to continue
-        </div>
+        <div style={styles.cookieExpiredBanner}>{T.session_expired_douyin}</div>
       )}
       <button style={styles.cookieToggle} onClick={() => setExpanded(x => !x)}>
-        <span>🔑 Paste Douyin Cookie</span>
+        <span>{T.douyin_paste_btn}</span>
         <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>{expanded ? '▲' : '▼'}</span>
       </button>
       {expanded && (
         <div style={styles.cookieBody}>
           <p style={styles.cookieInstructions}>
-            1. Open <strong>douyin.com</strong> in Chrome (logged in)<br />
-            2. Press <code>F12</code> → Network tab → reload the page<br />
-            3. Click any request → Headers → find <code>Cookie:</code><br />
-            4. Copy the full value and paste below
+            1. {T.douyin_step_1}<br />
+            2. {T.douyin_step_2}<br />
+            3. {T.douyin_step_3}<br />
+            4. {T.douyin_step_4}
           </p>
           <textarea
             style={styles.cookieTextarea}
@@ -258,7 +268,7 @@ function DouyinCookieSection({ session, onSave, onClear, isExpired = false }: {
             disabled={!input.trim()}
             onClick={() => { onSave(input.trim()); setInput('') }}
           >
-            Save Cookie
+            {T.save_cookie}
           </button>
         </div>
       )}
@@ -273,20 +283,15 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
   onSave: (cookie: string) => void
   isExpired?: boolean
 }) {
+  const { T } = useLang()
   const [showPaste, setShowPaste] = useState(false)
   const [input, setInput] = useState('')
   const [validationError, setValidationError] = useState('')
 
   const handleSave = () => {
     const cookie = input.trim()
-    if (!cookie.includes('web_session=')) {
-      setValidationError('Missing web_session cookie. XHS marks it as httpOnly so a bookmarklet can\'t read it — you must use the Network tab method below.')
-      return
-    }
-    if (!cookie.includes('a1=')) {
-      setValidationError('Missing a1 cookie. Make sure you\'re logged into xiaohongshu.com and copied the full Cookie header.')
-      return
-    }
+    if (!cookie.includes('web_session=')) { setValidationError(T.cookie_validation_no_session); return }
+    if (!cookie.includes('a1=')) { setValidationError(T.cookie_validation_no_a1); return }
     setValidationError('')
     onSave(cookie)
     setInput('')
@@ -296,9 +301,7 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
         {isExpired && (
-          <div style={styles.cookieExpiredBanner}>
-            ⚠️ Session expired — reconnect via QR or paste a fresh cookie
-          </div>
+          <div style={styles.cookieExpiredBanner}>{T.session_expired_xhs}</div>
         )}
         <button style={styles.qrLoginBtn} onClick={onQR}>
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
@@ -314,10 +317,10 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
             <rect x="11" y="15" width="2" height="2" fill="currentColor" />
             <rect x="15" y="15" width="2" height="2" fill="currentColor" />
           </svg>
-          Scan QR to connect 小红书
+          {T.scan_qr_btn}
         </button>
         <button style={styles.altAuthLink} onClick={() => setShowPaste(true)}>
-          Paste cookie manually instead
+          {T.paste_manual_link}
         </button>
       </div>
     )
@@ -327,18 +330,18 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
     <div style={styles.cookieSection}>
       <div style={styles.cookieBody}>
         <div style={styles.bookmarkletBox}>
-          <p style={styles.bookmarkletTitle}>One-click connect with the RedLens extension</p>
+          <p style={styles.bookmarkletTitle}>{T.cookie_one_click_title}</p>
           <ol style={styles.bookmarkletSteps}>
-            <li><a href="/extension.zip" download="redlens-extension.zip" style={{ color: 'var(--red)', fontWeight: 600 }}>Download redlens-extension.zip ↓</a> and unzip it</li>
-            <li>Chrome → <code>chrome://extensions</code> → toggle <strong>Developer mode</strong> → <strong>Load unpacked</strong> → pick the unzipped folder</li>
-            <li>Visit <strong>xiaohongshu.com</strong> (logged in). A red <strong>"Connect to RedLens"</strong> button appears bottom-right.</li>
-            <li>Click it. RedLens opens, already connected.</li>
+            <li>
+              <a href="/extension.zip" download="redlens-extension.zip" style={{ color: 'var(--red)', fontWeight: 600 }}>
+                {T.cookie_step_download} redlens-extension.zip ↓
+              </a>{T.cookie_step_unzip}
+            </li>
+            <li>{T.cookie_step_load}</li>
+            <li>{T.cookie_step_visit}</li>
+            <li>{T.cookie_step_click}</li>
           </ol>
-          <p style={styles.bookmarkletNote}>
-            One-time install. After that: every time you're on XHS, the button is right there — no extension icon, no copy/paste.
-            Manual fallback: F12 → <strong>Network</strong> → <strong>Fetch/XHR</strong> filter →
-            reload → click any <code>xiaohongshu.com</code> API request → copy the <code>cookie:</code> header value → paste below.
-          </p>
+          <p style={styles.bookmarkletNote}>{T.cookie_note} {T.cookie_manual_fallback}</p>
         </div>
         <textarea
           style={styles.cookieTextarea}
@@ -351,13 +354,13 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
           <div style={styles.validationError}>{validationError}</div>
         )}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button style={styles.altAuthLink} onClick={() => setShowPaste(false)}>← Back to QR</button>
+          <button style={styles.altAuthLink} onClick={() => setShowPaste(false)}>{T.back_to_qr}</button>
           <button
             style={{ ...styles.cookieSaveBtn, ...(input.trim() ? {} : styles.analyzeBtnDisabled) }}
             disabled={!input.trim()}
             onClick={handleSave}
           >
-            Save Cookie
+            {T.save_cookie}
           </button>
         </div>
       </div>
@@ -379,10 +382,19 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
   onAnalyze: (keyword: string, cookie: string, maxNotes: number, platform: Platform, dateRange: string) => void
   expiredPlatform?: Platform
 }) {
+  const { T, lang, setLang } = useLang()
   const [platform, setPlatform] = useState<Platform>(expiredPlatform ?? 'xhs')
   const [keyword, setKeyword] = useState('')
   const [maxNotes, setMaxNotes] = useState(15)
   const [dateRange, setDateRange] = useState('30d')
+
+  const dateOptions = [
+    { value: 'all', label: T.date_all },
+    { value: '7d', label: T.date_7d },
+    { value: '30d', label: T.date_30d },
+    { value: '90d', label: T.date_90d },
+    { value: '180d', label: T.date_180d },
+  ]
   const [sessions, setSessions] = useState<Record<Platform, { cookie: string; username: string }>>({
     xhs: loadSession('xhs'),
     douyin: loadSession('douyin'),
@@ -422,19 +434,25 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
           <LensLogo size={36} />
           <span style={styles.wordmark}>RedLens</span>
         </div>
-        <div style={styles.headerTag}>Content Intelligence</div>
+        <div style={styles.headerRight}>
+          <button
+            style={styles.langToggle}
+            onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
+            title="Switch language"
+          >
+            {lang === 'zh' ? LANG_LABELS.en : LANG_LABELS.zh}
+          </button>
+          <div style={styles.headerTag}>{T.brand_tag}</div>
+        </div>
       </header>
 
       {/* Hero */}
       <div style={styles.hero}>
         <h1 style={styles.heroTitle}>
-          Decode what makes<br />
-          <em style={styles.heroEm}>viral content</em> work.
+          {T.hero_title_a}<br />
+          <em style={styles.heroEm}>{T.hero_title_b}</em>
         </h1>
-        <p style={styles.heroSub}>
-          Enter a keyword. We analyze the top posts, comments, and patterns —
-          then tell you exactly what to create.
-        </p>
+        <p style={styles.heroSub}>{T.hero_sub}</p>
       </div>
 
       {/* Form card */}
@@ -462,11 +480,11 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
 
         {/* Keyword */}
         <div style={styles.fieldGroup}>
-          <label style={styles.label}>KEYWORD</label>
+          <label style={styles.label}>{T.field_keyword}</label>
           <input
             style={styles.input}
             type="text"
-            placeholder={platform === 'xhs' ? 'e.g. 减肥, 护肤, 穿搭, 旅游' : 'e.g. 减肥, 护肤, 穿搭, 搞笑'}
+            placeholder={platform === 'xhs' ? T.keyword_placeholder_xhs : T.keyword_placeholder_douyin}
             value={keyword}
             onChange={e => setKeyword(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && canSubmit && onAnalyze(keyword, session.cookie, maxNotes, platform, dateRange)}
@@ -477,7 +495,7 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
         {/* Auth section */}
         <div style={styles.fieldGroup}>
           <label style={styles.label}>
-            {activePlatform.emoji} {activePlatform.label.toUpperCase()} ACCOUNT
+            {activePlatform.emoji} {T.field_account(activePlatform.label)}
           </label>
 
           {platform === 'xhs' && (
@@ -485,10 +503,10 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
               <div style={styles.sessionRow}>
                 <div style={styles.sessionBadge}>
                   <span style={styles.sessionDot} />
-                  <span style={styles.sessionName}>{session.username || 'Connected'}</span>
+                  <span style={styles.sessionName}>{session.username || T.connected}</span>
                 </div>
                 <button style={styles.switchBtn} onClick={() => handleClearSession('xhs')}>
-                  Switch account
+                  {T.switch_account}
                 </button>
               </div>
             ) : (
@@ -516,26 +534,26 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
         {/* Notes slider */}
         <div style={styles.fieldGroup}>
           <label style={styles.label}>
-            POSTS TO ANALYZE
+            {T.posts_to_analyze}
             <span style={styles.sliderVal}>{maxNotes}</span>
           </label>
           <input type="range" min={5} max={20} value={maxNotes}
             onChange={e => setMaxNotes(Number(e.target.value))} style={styles.slider} />
           <div style={styles.sliderLabels}>
-            <span>5 (faster)</span>
-            <span>20 (deeper)</span>
+            <span>{T.slider_faster}</span>
+            <span>{T.slider_deeper}</span>
           </div>
         </div>
 
         {/* Date range */}
         <div style={styles.fieldGroup}>
-          <label style={styles.label}>POST DATE RANGE</label>
+          <label style={styles.label}>{T.date_range}</label>
           <select
             style={styles.select}
             value={dateRange}
             onChange={e => setDateRange(e.target.value)}
           >
-            {DATE_RANGE_OPTIONS.map(opt => (
+            {dateOptions.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
@@ -548,18 +566,16 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
           onClick={() => onAnalyze(keyword, session.cookie, maxNotes, platform, dateRange)}
         >
           <LensLogo size={20} />
-          <span>Analyze "{keyword || '…'}" on {activePlatform.label}</span>
+          <span>{T.analyze_cta(keyword, activePlatform.label)}</span>
         </button>
 
         {!session.cookie && (
-          <p style={styles.cookieHint}>
-            ↑ Connect your {activePlatform.label} account to start analyzing.
-          </p>
+          <p style={styles.cookieHint}>{T.cookie_hint(activePlatform.label)}</p>
         )}
       </div>
 
       <footer style={styles.setupFooter}>
-        Powered by <strong>mimo-v2.5</strong> · For research and learning purposes only
+        {T.footer_text} <strong>mimo-v2.5</strong> · {T.research_only}
       </footer>
     </div>
   )
@@ -574,6 +590,7 @@ function LoadingScreen({ stage, message, keyword, platform, onCancel }: {
   platform: Platform
   onCancel: () => void
 }) {
+  const { T } = useLang()
   const platformLabel = PLATFORMS.find(p => p.id === platform)?.label ?? platform
   return (
     <div style={styles.loadWrap}>
@@ -585,11 +602,11 @@ function LoadingScreen({ stage, message, keyword, platform, onCancel }: {
         </div>
         <div style={styles.loadStage}>
           <span style={stage === 'crawling' ? styles.loadStageActive : styles.loadStageDone}>
-            {stage === 'crawling' ? '●' : '✓'} Crawling {platformLabel}
+            {stage === 'crawling' ? '●' : '✓'} {T.load_stage_crawling(platformLabel)}
           </span>
           <span style={styles.loadArrow}>→</span>
           <span style={stage === 'analyzing' ? styles.loadStageActive : styles.loadStagePending}>
-            {stage === 'analyzing' ? '●' : '○'} AI Analysis
+            {stage === 'analyzing' ? '●' : '○'} {T.load_stage_analyzing}
           </span>
         </div>
         <h2 style={styles.loadKeyword}>"{keyword}"</h2>
@@ -602,7 +619,7 @@ function LoadingScreen({ stage, message, keyword, platform, onCancel }: {
             <span key={i} style={{ ...styles.loadDot, animationDelay: `${i * 0.2}s` }} />
           ))}
         </div>
-        <button style={styles.cancelBtn} onClick={onCancel}>Cancel</button>
+        <button style={styles.cancelBtn} onClick={onCancel}>{T.cancel}</button>
       </div>
     </div>
   )
@@ -628,6 +645,7 @@ function ReportScreen({ result, keyword, onReset }: {
   keyword: string
   onReset: () => void
 }) {
+  const { T } = useLang()
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
   const copyHook = useCallback((text: string, idx: number) => {
     navigator.clipboard.writeText(text)
@@ -651,14 +669,14 @@ function ReportScreen({ result, keyword, onReset }: {
           <span style={styles.navBrand}>RedLens</span>
         </div>
         <div style={styles.navKeyword}>"{keyword}"</div>
-        <button style={styles.navNew} onClick={onReset}>+ New Analysis</button>
+        <button style={styles.navNew} onClick={onReset}>{T.new_analysis}</button>
       </div>
 
       <div style={styles.reportContent}>
         {/* Hero */}
         <section style={styles.reportHero}>
           <div style={styles.reportMeta}>
-            <span style={styles.reportMetaItem}>{ms.total_posts_analyzed} posts analyzed</span>
+            <span style={styles.reportMetaItem}>{T.report_posts_analyzed(ms.total_posts_analyzed)}</span>
             <span style={styles.reportMetaDot}>·</span>
             <span style={styles.reportMetaItem}>
               {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
@@ -675,7 +693,7 @@ function ReportScreen({ result, keyword, onReset }: {
             <span style={styles.reportMetaModel}>{result._meta?.model || 'mimo-v2.5'}</span>
           </div>
           <h1 style={styles.reportTitle}>
-            Intelligence Report:<br />
+            {T.intelligence_report}：<br />
             <em style={styles.reportTitleEm}>{keyword}</em>
           </h1>
           <p style={styles.reportSummary}>{result.summary}</p>
@@ -684,10 +702,10 @@ function ReportScreen({ result, keyword, onReset }: {
         {/* Metrics */}
         <section style={styles.section}>
           <div style={styles.metricsRow}>
-            <MetricCard label="Avg. Likes" value={ms.avg_likes} icon="❤️" />
-            <MetricCard label="Avg. Collects" value={ms.avg_collects} icon="⭐" />
-            <MetricCard label="Avg. Comments" value={ms.avg_comments} icon="💬" />
-            <MetricCard label="Top Post Likes" value={ms.top_post_likes} icon="🔥" />
+            <MetricCard label={T.metric_avg_likes} value={ms.avg_likes} icon="❤️" />
+            <MetricCard label={T.metric_avg_collects} value={ms.avg_collects} icon="⭐" />
+            <MetricCard label={T.metric_avg_comments} value={ms.avg_comments} icon="💬" />
+            <MetricCard label={T.metric_top_likes} value={ms.top_post_likes} icon="🔥" />
           </div>
           {ms.engagement_rate_insight && (
             <p style={styles.engagementInsight}>{ms.engagement_rate_insight}</p>
@@ -697,7 +715,7 @@ function ReportScreen({ result, keyword, onReset }: {
         {/* Top Patterns */}
         {result.top_patterns?.length > 0 && (
           <section style={styles.section}>
-            <SectionHeader label="TOP PATTERNS" title="What's Working" />
+            <SectionHeader label={T.section_top_patterns_label} title={T.section_top_patterns_title} />
             <div style={styles.patternsScroll}>
               {result.top_patterns.map((p, i) => (
                 <div key={i} style={styles.patternCard}>
@@ -714,11 +732,11 @@ function ReportScreen({ result, keyword, onReset }: {
 
         {/* Content Insights */}
         <section style={styles.section}>
-          <SectionHeader label="CONTENT INSIGHTS" title="The Formula" />
+          <SectionHeader label={T.section_content_insights_label} title={T.section_content_insights_title} />
           <div style={styles.insightGrid}>
             {ci.winning_title_formulas?.length > 0 && (
               <div style={styles.insightCard}>
-                <h4 style={styles.insightCardTitle}>{isVideo ? 'Hook Formulas That Win' : 'Title Formulas That Win'}</h4>
+                <h4 style={styles.insightCardTitle}>{isVideo ? T.card_winning_hooks : T.card_winning_titles}</h4>
                 {ci.winning_title_formulas.map((f, i) => (
                   <div key={i} style={styles.formula}>
                     <span style={styles.formulaNum}>{i + 1}</span>
@@ -729,7 +747,7 @@ function ReportScreen({ result, keyword, onReset }: {
             )}
             {ci.best_content_formats?.length > 0 && (
               <div style={styles.insightCard}>
-                <h4 style={styles.insightCardTitle}>{isVideo ? 'Best Video Styles' : 'Best Content Formats'}</h4>
+                <h4 style={styles.insightCardTitle}>{isVideo ? T.card_best_video_styles : T.card_best_formats}</h4>
                 {ci.best_content_formats.map((f, i) => (
                   <div key={i} style={styles.formatItem}>
                     <span style={styles.formatBullet} />
@@ -739,13 +757,13 @@ function ReportScreen({ result, keyword, onReset }: {
               </div>
             )}
             <div style={styles.insightCard}>
-              <h4 style={styles.insightCardTitle}>{isVideo ? 'Duration & Visuals' : 'Length & Visuals'}</h4>
+              <h4 style={styles.insightCardTitle}>{isVideo ? T.card_duration_visuals : T.card_length_visuals}</h4>
               {ci.optimal_length && <p style={styles.insightText}>{ci.optimal_length}</p>}
               {ci.visual_patterns && <p style={styles.insightText}>{ci.visual_patterns}</p>}
             </div>
             {ci.key_keywords_used?.length > 0 && (
               <div style={styles.insightCard}>
-                <h4 style={styles.insightCardTitle}>Key Keywords in Top Posts</h4>
+                <h4 style={styles.insightCardTitle}>{T.card_keywords}</h4>
                 <div style={styles.pillRow}>
                   {ci.key_keywords_used.map((kw, i) => (
                     <span key={i} style={styles.pill}>{kw}</span>
@@ -753,7 +771,7 @@ function ReportScreen({ result, keyword, onReset }: {
                 </div>
                 {ci.trending_tags?.length ? (
                   <>
-                    <h4 style={{ ...styles.insightCardTitle, marginTop: '12px' }}>Trending Tags</h4>
+                    <h4 style={{ ...styles.insightCardTitle, marginTop: '12px' }}>{T.card_trending_tags}</h4>
                     <div style={styles.pillRow}>
                       {ci.trending_tags.map((t, i) => (
                         <span key={i} style={{ ...styles.pill, background: 'rgba(62,207,142,0.08)', borderColor: 'rgba(62,207,142,0.2)', color: 'var(--green)' }}>#{t}</span>
@@ -768,11 +786,11 @@ function ReportScreen({ result, keyword, onReset }: {
 
         {/* Comment Intelligence */}
         <section style={styles.section}>
-          <SectionHeader label="COMMENT INTELLIGENCE" title="The Conversation" />
+          <SectionHeader label={T.section_comment_label} title={T.section_comment_title} />
           <div style={styles.commentGrid}>
             {cmi.top_pain_points?.length > 0 && (
               <div style={styles.commentCard}>
-                <h4 style={styles.commentCardTitle}><span style={{ color: 'var(--red)' }}>⚡</span> Top Pain Points</h4>
+                <h4 style={styles.commentCardTitle}><span style={{ color: 'var(--red)' }}>⚡</span> {T.card_pain_points}</h4>
                 {cmi.top_pain_points.map((p, i) => (
                   <div key={i} style={styles.commentItem}>
                     <span style={styles.commentBullet}>→</span><span>{p}</span>
@@ -782,7 +800,7 @@ function ReportScreen({ result, keyword, onReset }: {
             )}
             {cmi.common_questions?.length > 0 && (
               <div style={styles.commentCard}>
-                <h4 style={styles.commentCardTitle}><span style={{ color: 'var(--gold)' }}>?</span> Common Questions</h4>
+                <h4 style={styles.commentCardTitle}><span style={{ color: 'var(--gold)' }}>?</span> {T.card_questions}</h4>
                 {cmi.common_questions.map((q, i) => (
                   <div key={i} style={styles.commentItem}>
                     <span style={styles.commentBullet}>→</span><span>{q}</span>
@@ -792,7 +810,7 @@ function ReportScreen({ result, keyword, onReset }: {
             )}
             {cmi.sentiment && (
               <div style={styles.commentCard}>
-                <h4 style={styles.commentCardTitle}>Sentiment Overview</h4>
+                <h4 style={styles.commentCardTitle}>{T.card_sentiment}</h4>
                 <p style={styles.sentimentText}>{cmi.sentiment}</p>
               </div>
             )}
@@ -802,7 +820,7 @@ function ReportScreen({ result, keyword, onReset }: {
         {/* Suggested Angles */}
         {result.suggested_angles?.length > 0 && (
           <section style={styles.section}>
-            <SectionHeader label="SUGGESTED ANGLES" title="Your Opportunity" />
+            <SectionHeader label={T.section_angles_label} title={T.section_angles_title} />
             <div style={styles.anglesGrid}>
               {result.suggested_angles.map((a, i) => (
                 <div key={i} style={styles.angleCard}>
@@ -811,7 +829,7 @@ function ReportScreen({ result, keyword, onReset }: {
                   <div style={styles.angleDivider} />
                   <p style={styles.angleRationale}>{a.rationale}</p>
                   <div style={styles.angleDiff}>
-                    <span style={styles.angleDiffLabel}>How to differentiate</span>
+                    <span style={styles.angleDiffLabel}>{T.how_to_differentiate}</span>
                     <p>{a.differentiation}</p>
                   </div>
                 </div>
@@ -823,7 +841,7 @@ function ReportScreen({ result, keyword, onReset }: {
         {/* Hook Examples */}
         {result.hook_examples?.length > 0 && (
           <section style={styles.section}>
-            <SectionHeader label="HOOK EXAMPLES" title="Steal These Openers" />
+            <SectionHeader label={T.section_hooks_label} title={T.section_hooks_title} />
             <div style={styles.hooksCol}>
               {result.hook_examples.map((h, i) => (
                 <div key={i} style={styles.hookCard}>
@@ -833,7 +851,7 @@ function ReportScreen({ result, keyword, onReset }: {
                     style={{ ...styles.copyBtn, ...(copiedIdx === i ? styles.copyBtnDone : {}) }}
                     onClick={() => copyHook(h, i)}
                   >
-                    {copiedIdx === i ? '✓ Copied' : 'Copy'}
+                    {copiedIdx === i ? T.copied : T.copy}
                   </button>
                 </div>
               ))}
@@ -844,25 +862,43 @@ function ReportScreen({ result, keyword, onReset }: {
         {/* Posts Analyzed */}
         {result._posts?.length > 0 && (
           <section style={styles.section}>
-            <SectionHeader label="SOURCE DATA" title="Posts Analyzed" />
+            <SectionHeader label={T.section_source_label} title={T.section_source_title} />
             <div style={styles.postsGrid}>
-              {result._posts.map((p, i) => (
-                <div key={i} style={styles.postCard}>
-                  <div style={styles.postHeader}>
-                    <span style={styles.postType}>
-                      {p.type === 'video' ? '▶ Video' : '📄 Note'}
-                      {p.duration ? ` · ${(p.duration / 1000).toFixed(0)}s` : ''}
-                    </span>
-                    <span style={styles.postCreator}>@{p.user}</span>
-                  </div>
-                  <p style={styles.postTitle}>{p.title || '(no title)'}</p>
-                  <div style={styles.postMetrics}>
-                    <span>❤️ {fmtNum(p.liked_count)}</span>
-                    <span>💬 {fmtNum(p.comment_count)}</span>
-                    {p.play_count ? <span>▶ {fmtNum(p.play_count)}</span> : <span>⭐ {fmtNum(p.collected_count)}</span>}
-                  </div>
-                </div>
-              ))}
+              {result._posts.map((p, i) => {
+                const inner = (
+                  <>
+                    <div style={styles.postHeader}>
+                      <span style={styles.postType}>
+                        {p.type === 'video' ? T.post_type_video : T.post_type_note}
+                        {p.duration ? ` · ${(p.duration / 1000).toFixed(0)}s` : ''}
+                      </span>
+                      <span style={styles.postCreator}>@{p.user}</span>
+                    </div>
+                    <p style={styles.postTitle}>{p.title || T.no_title}</p>
+                    <div style={styles.postMetrics}>
+                      <span>❤️ {fmtNum(p.liked_count)}</span>
+                      <span>💬 {fmtNum(p.comment_count)}</span>
+                      {p.play_count ? <span>▶ {fmtNum(p.play_count)}</span> : <span>⭐ {fmtNum(p.collected_count)}</span>}
+                    </div>
+                    {p.note_url && (
+                      <span style={styles.postLinkHint}>{T.view_post}</span>
+                    )}
+                  </>
+                )
+                return p.note_url ? (
+                  <a
+                    key={i}
+                    href={p.note_url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    style={{ ...styles.postCard, ...styles.postCardLink }}
+                  >
+                    {inner}
+                  </a>
+                ) : (
+                  <div key={i} style={styles.postCard}>{inner}</div>
+                )
+              })}
             </div>
           </section>
         )}
@@ -872,7 +908,7 @@ function ReportScreen({ result, keyword, onReset }: {
           <span>RedLens · Powered by <strong>mimo-v2.5</strong> · For research and learning only</span>
           {result._meta && (
             <span style={styles.tokenMeta}>
-              {result._meta.prompt_tokens + result._meta.completion_tokens} tokens used
+              {T.tokens_used(result._meta.prompt_tokens + result._meta.completion_tokens)}
             </span>
           )}
         </footer>
@@ -898,6 +934,10 @@ function fmtNum(n: number): string {
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [lang, setLangState] = useState<Lang>(loadLang())
+  const setLang = useCallback((l: Lang) => { setLangState(l); saveLang(l) }, [])
+  const T = translations[lang]
+
   const [appState, setAppState] = useState<AppState>('setup')
   const [loadStage, setLoadStage] = useState<LoadStage>('crawling')
   const [loadMessage, setLoadMessage] = useState('')
@@ -910,8 +950,6 @@ export default function App() {
   const esRef = useRef<EventSource | null>(null)
 
   // Detect cookie sent by the RedLens browser extension via URL fragment
-  // (#xhs_cookie=...). Fragments are not sent to the server, so this never
-  // hits server logs. Save it, scrub the URL, show a toast.
   useEffect(() => {
     const hash = window.location.hash
     const match = hash.match(/[#&]xhs_cookie=([^&]+)/)
@@ -920,19 +958,18 @@ export default function App() {
       const cookie = decodeURIComponent(match[1])
       if (cookie.includes('web_session=') && cookie.includes('a1=')) {
         storeSession('xhs', cookie, '')
-        setExtensionToast('小红书 connected via extension')
+        setExtensionToast(T.ext_connected)
         setTimeout(() => setExtensionToast(null), 4000)
       } else {
-        setExtensionToast('Extension cookie was incomplete (missing web_session or a1)')
+        setExtensionToast(T.ext_incomplete)
         setTimeout(() => setExtensionToast(null), 5000)
       }
     } catch (e) {
       console.error('Failed to parse extension cookie:', e)
     } finally {
-      // Strip the fragment from URL without adding history
       history.replaceState(null, '', window.location.pathname + window.location.search)
     }
-  }, [])
+  }, [T])
 
   const handleAnalyze = useCallback((kw: string, cookie: string, maxNotes: number, plt: Platform, dateRange: string) => {
     const platformLabel = PLATFORMS.find(p => p.id === plt)?.label ?? plt
@@ -949,6 +986,7 @@ export default function App() {
       max_notes: String(maxNotes),
       platform: plt,
       date_range: dateRange,
+      language: lang,
     })
     const es = new EventSource(`/api/analyze?${params}`)
     esRef.current = es
@@ -992,45 +1030,40 @@ export default function App() {
   const handleCancel = useCallback(() => { esRef.current?.close(); setExpiredPlatform(undefined); setAppState('setup') }, [])
   const handleReset = useCallback(() => { esRef.current?.close(); setResult(null); setError(null); setAppState('setup') }, [])
 
-  if (appState === 'loading') {
-    return (
-      <LoadingScreen
-        stage={loadStage}
-        message={loadMessage}
-        keyword={keyword}
-        platform={platform}
-        onCancel={handleCancel}
-      />
-    )
-  }
-
-  if (appState === 'report' && result) {
-    return <ReportScreen result={result} keyword={keyword} onReset={handleReset} />
-  }
-
-  if (appState === 'error') {
-    return (
-      <div style={styles.errorWrap}>
-        <div style={styles.errorCard}>
-          <LensLogo size={40} />
-          <h2 style={styles.errorTitle}>Analysis Failed</h2>
-          <p style={styles.errorMsg}>{error}</p>
-          <button style={styles.analyzeBtn} onClick={handleReset}>Try Again</button>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <>
-      <SetupScreen onAnalyze={handleAnalyze} expiredPlatform={expiredPlatform} />
+    <LangContext.Provider value={{ lang, T, setLang }}>
+      {appState === 'loading' && (
+        <LoadingScreen
+          stage={loadStage}
+          message={loadMessage}
+          keyword={keyword}
+          platform={platform}
+          onCancel={handleCancel}
+        />
+      )}
+      {appState === 'report' && result && (
+        <ReportScreen result={result} keyword={keyword} onReset={handleReset} />
+      )}
+      {appState === 'error' && (
+        <div style={styles.errorWrap}>
+          <div style={styles.errorCard}>
+            <LensLogo size={40} />
+            <h2 style={styles.errorTitle}>{T.err_analysis_failed}</h2>
+            <p style={styles.errorMsg}>{error}</p>
+            <button style={styles.analyzeBtn} onClick={handleReset}>{T.try_again}</button>
+          </div>
+        </div>
+      )}
+      {appState === 'setup' && (
+        <SetupScreen onAnalyze={handleAnalyze} expiredPlatform={expiredPlatform} />
+      )}
       {extensionToast && (
         <div style={styles.extensionToast}>
           <span style={{ color: 'var(--green)' }}>✓</span>
           <span>{extensionToast}</span>
         </div>
       )}
-    </>
+    </LangContext.Provider>
   )
 }
 
@@ -1043,6 +1076,8 @@ const styles: Record<string, React.CSSProperties> = {
   logoRow: { display: 'flex', alignItems: 'center', gap: '10px' },
   wordmark: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: 700, color: 'var(--text)', letterSpacing: '-0.02em' },
   headerTag: { fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.12em', color: 'var(--text-3)', textTransform: 'uppercase' as const },
+  headerRight: { display: 'flex', alignItems: 'center', gap: '12px' },
+  langToggle: { background: 'var(--bg-1)', border: '1px solid var(--border)', color: 'var(--text-2)', padding: '6px 12px', borderRadius: '999px', fontSize: '11px', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em', transition: 'all 0.15s' },
   hero: { width: '100%', maxWidth: '640px', padding: '64px 0 48px', animation: 'fade-up 0.6s ease' },
   heroTitle: { fontFamily: 'var(--font-display)', fontSize: 'clamp(36px, 6vw, 56px)', fontWeight: 700, lineHeight: 1.1, letterSpacing: '-0.03em', color: 'var(--text)', marginBottom: '20px' },
   heroEm: { fontStyle: 'italic', color: 'var(--red)' },
@@ -1201,6 +1236,8 @@ const styles: Record<string, React.CSSProperties> = {
 
   postsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '12px' },
   postCard: { background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' },
+  postCardLink: { textDecoration: 'none', color: 'inherit', cursor: 'pointer', transition: 'border-color 0.15s, transform 0.1s' },
+  postLinkHint: { fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--red)', marginTop: '4px', letterSpacing: '0.04em' },
   postHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center' },
   postType: { fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--text-3)' },
   postCreator: { fontFamily: 'var(--font-mono)', fontSize: '10px', color: 'var(--text-3)', maxWidth: '100px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const },

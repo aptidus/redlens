@@ -296,6 +296,7 @@ async def scrape_douyin(
 
             note: Dict = {
                 "note_id": aweme_id,
+                "note_url": f"https://www.douyin.com/video/{aweme_id}",
                 "title": info.get("desc", "")[:200],
                 "desc": info.get("desc", ""),
                 "type": "video",

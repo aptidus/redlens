@@ -21,19 +21,29 @@ _PLATFORM_NAMES = {
 }
 
 
-async def analyze_notes(keyword: str, notes: List[Dict], platform: str = "xhs") -> Dict[str, Any]:
+async def analyze_notes(keyword: str, notes: List[Dict], platform: str = "xhs", language: str = "zh") -> Dict[str, Any]:
     """
     Send scraped notes/videos to mimo-v2.5 and get a structured analysis report.
     Returns a dict with: summary, top_patterns, content_insights,
     comment_insights, suggested_angles, hook_examples, metrics_summary.
+    `language` controls the output language of all string fields ("zh" or "en").
     Raises RuntimeError on transport or API failure.
     """
     platform_name = _PLATFORM_NAMES.get(platform, platform.upper())
     notes_text = _format_notes_for_prompt(notes, platform)
 
+    lang = "zh" if language not in ("zh", "en") else language
+    lang_instruction = (
+        "All string values in the output JSON MUST be written in Simplified Chinese (简体中文). "
+        "Keep JSON keys in English exactly as specified. Do not translate keys."
+        if lang == "zh"
+        else "All string values in the output JSON MUST be in English."
+    )
+
     system_prompt = f"""You are an expert content strategist for {platform_name}.
 Your job is to analyze top-performing posts and extract actionable insights for content creators.
 Be specific, concrete, and data-driven. Focus on what actually worked, not generic advice.
+{lang_instruction}
 Respond in JSON format only — no markdown fences, no extra text."""
 
     is_video = platform in ("douyin", "bilibili")

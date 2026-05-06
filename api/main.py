@@ -106,7 +106,7 @@ async def validate_cookie(req: ValidateCookieRequest):
 
 
 @app.get("/api/analyze")
-async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platform: str = "xhs", date_range: str = "all"):
+async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platform: str = "xhs", date_range: str = "all", language: str = "zh"):
     """SSE stream: crawl platform → AI analysis → done."""
     if not keyword.strip():
         raise HTTPException(400, "keyword required")
@@ -149,7 +149,7 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platfor
                 "count": len(notes),
             })}
 
-            analysis = await analyze_notes(keyword, notes, platform=platform)
+            analysis = await analyze_notes(keyword, notes, platform=platform, language=language)
 
             analysis["_posts"] = [
                 {
@@ -163,6 +163,7 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platfor
                     "type": n.get("type", "normal"),
                     "tags": n.get("tags", []),
                     "duration": n.get("duration", 0),
+                    "note_url": n.get("note_url", ""),
                 }
                 for n in notes
             ]
