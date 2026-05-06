@@ -73,17 +73,41 @@ def _raise_for_code(code: int, msg: str) -> None:
 # Signing + headers
 # ---------------------------------------------------------------------------
 
-def _get_common_headers(cookie_str: str) -> Dict[str, str]:
+_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/147.0.0.0 Safari/537.36"
+)
+
+
+def _cookie_dict(cookie_str: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for part in cookie_str.split(";"):
+        part = part.strip()
+        if "=" in part:
+            k, _, v = part.partition("=")
+            out[k.strip()] = v.strip()
+    return out
+
+
+def _full_browser_headers(cookie_str: str) -> Dict[str, str]:
+    """Headers matching a real Chrome 147 — XHS fingerprints these."""
     return {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "Referer": XHS_DOMAIN,
+        "User-Agent": _USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en,zh-CN;q=0.9,zh;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
         "Origin": XHS_DOMAIN,
+        "Referer": XHS_DOMAIN + "/",
         "Cookie": cookie_str,
-        "Content-Type": "application/json",
+        "Content-Type": "application/json;charset=UTF-8",
+        "sec-ch-ua": '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+        "priority": "u=1, i",
     }
 
 
@@ -93,41 +117,63 @@ def _sign_request(
     payload: Optional[Dict] = None,
     cookie_str: str = "",
 ) -> Dict[str, str]:
-    """Generate X-S / X-T headers via xhshow library."""
+    """
+    Generate ALL signing headers via xhshow's sign_headers_post/get.
+    Returns x-s, x-s-common, x-t, x-b3-traceid, x-xray-traceid.
+    """
     try:
-        import random
-        import time
-
         from xhshow import Xhshow  # type: ignore[import]
 
-        a1 = ""
-        for part in cookie_str.split(";"):
-            part = part.strip()
-            if part.startswith("a1="):
-                a1 = part[3:].strip()
-                break
-        if not a1:
+        cookies = _cookie_dict(cookie_str)
+        if not cookies.get("a1"):
             logger.warning("XHS signing: no 'a1' cookie found — request will be unsigned")
             return {}
 
-        method = "GET" if params is not None else "POST"
-        data = params if params is not None else payload
-
         client = Xhshow()
-        xs = client.sign_xs(method=method, uri=uri, a1_value=a1, payload=data)
-        xs_common = client.sign_xs_common(cookie_str)
-        xt = str(int(time.time() * 1000))
-        b3 = "".join(random.choices("0123456789abcdef", k=32))
-        logger.debug("XHS signing OK for %s (method=%s)", uri, method)
-        return {
-            "X-S": xs,
-            "X-T": xt,
-            "x-S-Common": xs_common,
-            "X-B3-Traceid": b3,
-        }
+        if params is not None:
+            return client.sign_headers_get(uri=uri, cookies=cookies, params=params)
+        return client.sign_headers_post(uri=uri, cookies=cookies, payload=payload or {})
     except Exception as exc:
         logger.warning("XHS signing failed for %s: %s — request will be unsigned", uri, exc)
         return {}
+
+
+async def _warmup_session(client: httpx.AsyncClient, cookie_str: str) -> str:
+    """
+    Hit xiaohongshu.com homepage once to refresh JS-set cookies (acw_tc, etc.)
+    that XHS's anti-bot system expects to be fresh. Returns the merged cookie
+    string with any new Set-Cookie values. Failures are non-fatal.
+    """
+    try:
+        resp = await client.get(
+            XHS_DOMAIN + "/",
+            headers={
+                "User-Agent": _USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
+                "Accept-Language": "en,zh-CN;q=0.9,zh;q=0.8",
+                "Cookie": cookie_str,
+                "sec-ch-ua": '"Google Chrome";v="147"',
+                "sec-fetch-dest": "document",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-site": "none",
+                "upgrade-insecure-requests": "1",
+            },
+            follow_redirects=True,
+            timeout=15,
+        )
+        merged = _cookie_dict(cookie_str)
+        for c in client.cookies.jar:
+            merged[c.name] = c.value
+        merged_str = "; ".join(f"{k}={v}" for k, v in merged.items())
+        new_count = len(merged) - len(_cookie_dict(cookie_str))
+        logger.info(
+            "Warmup: status=%s, +%d cookies (acw_tc=%s)",
+            resp.status_code, new_count, "yes" if "acw_tc" in merged else "no",
+        )
+        return merged_str
+    except Exception as exc:
+        logger.warning("Warmup failed (non-fatal): %s", exc)
+        return cookie_str
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +183,7 @@ def _sign_request(
 class XHSClient:
     def __init__(self, cookie_str: str):
         self.cookie_str = cookie_str
+        self._warmed = False
         proxy = _PROXY_URL
         if proxy:
             logger.info("XHSClient using proxy: %s", proxy.split("@")[-1])
@@ -144,6 +191,13 @@ class XHSClient:
 
     async def close(self) -> None:
         await self._client.aclose()
+
+    async def _ensure_warm(self) -> None:
+        """Lazy session warmup. Refreshes acw_tc / websectiga / sec_poison_id."""
+        if self._warmed:
+            return
+        self.cookie_str = await _warmup_session(self._client, self.cookie_str)
+        self._warmed = True
 
     @retry(
         stop=stop_after_attempt(3),
@@ -154,8 +208,9 @@ class XHSClient:
         reraise=True,
     )
     async def _get(self, uri: str, params: Dict) -> Any:
+        await self._ensure_warm()
         sign_headers = _sign_request(uri, params=params, cookie_str=self.cookie_str)
-        headers = {**_get_common_headers(self.cookie_str), **sign_headers}
+        headers = {**_full_browser_headers(self.cookie_str), **sign_headers}
         url = f"{XHS_HOST}{uri}?{urlencode(params)}"
         resp = await self._client.get(url, headers=headers)
         resp.raise_for_status()
@@ -173,8 +228,9 @@ class XHSClient:
         reraise=True,
     )
     async def _post(self, uri: str, payload: Dict) -> Any:
+        await self._ensure_warm()
         sign_headers = _sign_request(uri, payload=payload, cookie_str=self.cookie_str)
-        headers = {**_get_common_headers(self.cookie_str), **sign_headers}
+        headers = {**_full_browser_headers(self.cookie_str), **sign_headers}
         url = f"{XHS_HOST}{uri}"
         resp = await self._client.post(url, headers=headers, json=payload)
         resp.raise_for_status()
