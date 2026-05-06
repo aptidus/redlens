@@ -127,8 +127,10 @@ async def scrape_xhs_via_browser(
     playwright = await async_playwright().start()
     browser = None
     try:
+        # No proxy: QR login confirms direct Railway→XHS works for browser flows.
+        # Oxylabs IPs were soft-blocked (200 OK with empty results).
         browser = await playwright.chromium.launch(
-            headless=True, args=_STEALTH_ARGS, proxy=_playwright_proxy_config()
+            headless=True, args=_STEALTH_ARGS
         )
         context = await browser.new_context(
             locale="zh-CN",

@@ -349,6 +349,15 @@ async def _scrape_keyword_http(
         items = search_data.get("items", [])
         logger.info("XHS search returned %d raw items (sort=%s)", len(items), sort)
 
+        # Soft-block detection: XHS sometimes returns 200 OK with 0 items
+        # when the calling IP is flagged (Oxylabs/datacenter). Treat as -104
+        # so the caller can fall back to the Playwright browser scraper.
+        if not items:
+            raise XHSPermissionError(
+                "XHS returned 0 search results (likely IP soft-block).",
+                code=-104,
+            )
+
         if cutoff:
             # Search-list responses don't include create_time, so only filter
             # the items that DO have a usable time; keep the rest in sort order.
