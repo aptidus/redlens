@@ -330,14 +330,14 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
           <p style={styles.bookmarkletTitle}>One-click connect with the RedLens extension</p>
           <ol style={styles.bookmarkletSteps}>
             <li>Download <a href="https://github.com/aptidus/redlens/tree/main/extension" target="_blank" rel="noreferrer" style={{ color: 'var(--red)' }}>the <code>extension/</code> folder</a> from the repo</li>
-            <li>Chrome → <code>chrome://extensions</code> → enable <strong>Developer mode</strong> → <strong>Load unpacked</strong> → pick the folder</li>
-            <li>Log into <strong>xiaohongshu.com</strong> in any tab</li>
-            <li>Click the extension icon → <strong>Connect to RedLens</strong></li>
-            <li>RedLens opens with your account already connected. Done.</li>
+            <li>Chrome → <code>chrome://extensions</code> → toggle <strong>Developer mode</strong> → <strong>Load unpacked</strong> → pick that folder</li>
+            <li>Visit <strong>xiaohongshu.com</strong> (logged in). A red <strong>"Connect to RedLens"</strong> button appears bottom-right.</li>
+            <li>Click it. RedLens opens, already connected.</li>
           </ol>
           <p style={styles.bookmarkletNote}>
-            Manual fallback: F12 → <strong>Network</strong> → click <strong>Fetch/XHR</strong> filter →
-            reload → click any <code>xiaohongshu.com</code> API request → Request Headers → copy <code>cookie:</code> value → paste below.
+            One-time install. After that: every time you're on XHS, the button is right there — no extension icon, no copy/paste.
+            Manual fallback: F12 → <strong>Network</strong> → <strong>Fetch/XHR</strong> filter →
+            reload → click any <code>xiaohongshu.com</code> API request → copy the <code>cookie:</code> header value → paste below.
           </p>
         </div>
         <textarea
