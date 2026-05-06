@@ -133,31 +133,31 @@ function QRModal({ onAuthenticated, onClose }: {
   const [statusMsg, setStatusMsg] = useState('Connecting to 小红书…')
   const qrStateRef = useRef<QRState>('connecting')
 
-  useEffect(() => { qrStateRef.current = qrState }, [qrState])
+  const setQrStateSync = (s: QRState) => { qrStateRef.current = s; setQrState(s) }
 
   useEffect(() => {
     const es = new EventSource('/api/login/qr')
     es.addEventListener('status', (e: MessageEvent) => setStatusMsg(JSON.parse(e.data).message))
     es.addEventListener('qr', (e: MessageEvent) => {
       setQrImage(JSON.parse(e.data).image)
-      setQrState('showing')
+      setQrStateSync('showing')
     })
     es.addEventListener('authenticated', (e: MessageEvent) => {
       const data = JSON.parse(e.data)
-      setQrState('done')
+      setQrStateSync('done')
       setStatusMsg('Connected!')
       es.close()
       setTimeout(() => onAuthenticated(data.cookie, data.username || ''), 700)
     })
     es.addEventListener('error', (e: MessageEvent) => {
       try { setStatusMsg(JSON.parse(e.data).message || 'Login failed.') } catch { setStatusMsg('Connection error.') }
-      setQrState('error')
+      setQrStateSync('error')
       es.close()
     })
     es.onerror = () => {
       if (qrStateRef.current !== 'done' && qrStateRef.current !== 'error') {
-        setStatusMsg('Connection lost.')
-        setQrState('error')
+        setStatusMsg('Connection lost. Try the cookie paste method instead.')
+        setQrStateSync('error')
       }
       es.close()
     }
@@ -206,10 +206,11 @@ function QRModal({ onAuthenticated, onClose }: {
 
 // ─── Douyin Cookie Section ────────────────────────────────────────────────────
 
-function DouyinCookieSection({ session, onSave, onClear }: {
+function DouyinCookieSection({ session, onSave, onClear, isExpired = false }: {
   session: { cookie: string; username: string }
   onSave: (cookie: string) => void
   onClear: () => void
+  isExpired?: boolean
 }) {
   const [expanded, setExpanded] = useState(!session.cookie)
   const [input, setInput] = useState('')
@@ -228,6 +229,11 @@ function DouyinCookieSection({ session, onSave, onClear }: {
 
   return (
     <div style={styles.cookieSection}>
+      {isExpired && (
+        <div style={styles.cookieExpiredBanner}>
+          ⚠️ Cookie expired — paste a fresh one to continue
+        </div>
+      )}
       <button style={styles.cookieToggle} onClick={() => setExpanded(x => !x)}>
         <span>🔑 Paste Douyin Cookie</span>
         <span style={{ color: 'var(--text-3)', fontSize: '12px' }}>{expanded ? '▲' : '▼'}</span>
@@ -236,8 +242,8 @@ function DouyinCookieSection({ session, onSave, onClear }: {
         <div style={styles.cookieBody}>
           <p style={styles.cookieInstructions}>
             1. Open <strong>douyin.com</strong> in Chrome (logged in)<br />
-            2. Press <code>F12</code> → Network tab → search for any request<br />
-            3. Click a request → Headers → find <code>Cookie:</code><br />
+            2. Press <code>F12</code> → Network tab → reload the page<br />
+            3. Click any request → Headers → find <code>Cookie:</code><br />
             4. Copy the full value and paste below
           </p>
           <textarea
@@ -260,14 +266,96 @@ function DouyinCookieSection({ session, onSave, onClear }: {
   )
 }
 
+// ─── XHS Auth Section ────────────────────────────────────────────────────────
+
+function XHSAuthSection({ onQR, onSave, isExpired }: {
+  onQR: () => void
+  onSave: (cookie: string) => void
+  isExpired?: boolean
+}) {
+  const [showPaste, setShowPaste] = useState(false)
+  const [input, setInput] = useState('')
+
+  if (!showPaste) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        {isExpired && (
+          <div style={styles.cookieExpiredBanner}>
+            ⚠️ Session expired — reconnect via QR or paste a fresh cookie
+          </div>
+        )}
+        <button style={styles.qrLoginBtn} onClick={onQR}>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+            <rect x="2" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+            <rect x="11" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+            <rect x="2" y="11" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
+            <rect x="4" y="4" width="3" height="3" fill="currentColor" />
+            <rect x="13" y="4" width="3" height="3" fill="currentColor" />
+            <rect x="4" y="13" width="3" height="3" fill="currentColor" />
+            <rect x="11" y="11" width="2" height="2" fill="currentColor" />
+            <rect x="15" y="11" width="2" height="2" fill="currentColor" />
+            <rect x="13" y="13" width="2" height="2" fill="currentColor" />
+            <rect x="11" y="15" width="2" height="2" fill="currentColor" />
+            <rect x="15" y="15" width="2" height="2" fill="currentColor" />
+          </svg>
+          Scan QR to connect 小红书
+        </button>
+        <button style={styles.altAuthLink} onClick={() => setShowPaste(true)}>
+          Paste cookie manually instead
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div style={styles.cookieSection}>
+      <div style={styles.cookieBody}>
+        <p style={styles.cookieInstructions}>
+          1. Open <strong>xiaohongshu.com</strong> in Chrome (logged in)<br />
+          2. Press <code>F12</code> → Network tab → reload the page<br />
+          3. Click any request → Headers → find <code>Cookie:</code><br />
+          4. Copy the full value and paste below
+        </p>
+        <textarea
+          style={styles.cookieTextarea}
+          placeholder="a1=...; web_session=...; webId=..."
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          rows={3}
+        />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button style={styles.altAuthLink} onClick={() => setShowPaste(false)}>← Back to QR</button>
+          <button
+            style={{ ...styles.cookieSaveBtn, ...(input.trim() ? {} : styles.analyzeBtnDisabled) }}
+            disabled={!input.trim()}
+            onClick={() => { onSave(input.trim()); setInput('') }}
+          >
+            Save Cookie
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Setup Screen ─────────────────────────────────────────────────────────────
 
-function SetupScreen({ onAnalyze }: {
-  onAnalyze: (keyword: string, cookie: string, maxNotes: number, platform: Platform) => void
+const DATE_RANGE_OPTIONS = [
+  { value: 'all', label: 'All time' },
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: '90d', label: 'Last 3 months' },
+  { value: '180d', label: 'Last 6 months' },
+]
+
+function SetupScreen({ onAnalyze, expiredPlatform }: {
+  onAnalyze: (keyword: string, cookie: string, maxNotes: number, platform: Platform, dateRange: string) => void
+  expiredPlatform?: Platform
 }) {
-  const [platform, setPlatform] = useState<Platform>('xhs')
+  const [platform, setPlatform] = useState<Platform>(expiredPlatform ?? 'xhs')
   const [keyword, setKeyword] = useState('')
   const [maxNotes, setMaxNotes] = useState(15)
+  const [dateRange, setDateRange] = useState('30d')
   const [sessions, setSessions] = useState<Record<Platform, { cookie: string; username: string }>>({
     xhs: loadSession('xhs'),
     douyin: loadSession('douyin'),
@@ -279,10 +367,10 @@ function SetupScreen({ onAnalyze }: {
   const activePlatform = PLATFORMS.find(p => p.id === platform)!
 
   const handleAuthenticated = useCallback((cookie: string, username: string) => {
-    storeSession(platform, cookie, username)
-    setSessions(s => ({ ...s, [platform]: { cookie, username } }))
+    storeSession('xhs', cookie, username)
+    setSessions(s => ({ ...s, xhs: { cookie, username } }))
     setShowQR(false)
-  }, [platform])
+  }, [])
 
   const handleClearSession = useCallback((p: Platform) => {
     clearSession(p)
@@ -299,7 +387,6 @@ function SetupScreen({ onAnalyze }: {
       {showQR && (
         <QRModal onAuthenticated={handleAuthenticated} onClose={() => setShowQR(false)} />
       )}
-
       <div style={styles.setupGlow} />
 
       {/* Header */}
@@ -355,7 +442,7 @@ function SetupScreen({ onAnalyze }: {
             placeholder={platform === 'xhs' ? 'e.g. 减肥, 护肤, 穿搭, 旅游' : 'e.g. 减肥, 护肤, 穿搭, 搞笑'}
             value={keyword}
             onChange={e => setKeyword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && canSubmit && onAnalyze(keyword, session.cookie, maxNotes, platform)}
+            onKeyDown={e => e.key === 'Enter' && canSubmit && onAnalyze(keyword, session.cookie, maxNotes, platform, dateRange)}
             autoFocus
           />
         </div>
@@ -378,22 +465,14 @@ function SetupScreen({ onAnalyze }: {
                 </button>
               </div>
             ) : (
-              <button style={styles.qrLoginBtn} onClick={() => setShowQR(true)}>
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <rect x="2" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-                  <rect x="11" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-                  <rect x="2" y="11" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-                  <rect x="4" y="4" width="3" height="3" fill="currentColor" />
-                  <rect x="13" y="4" width="3" height="3" fill="currentColor" />
-                  <rect x="4" y="13" width="3" height="3" fill="currentColor" />
-                  <rect x="11" y="11" width="2" height="2" fill="currentColor" />
-                  <rect x="15" y="11" width="2" height="2" fill="currentColor" />
-                  <rect x="13" y="13" width="2" height="2" fill="currentColor" />
-                  <rect x="11" y="15" width="2" height="2" fill="currentColor" />
-                  <rect x="15" y="15" width="2" height="2" fill="currentColor" />
-                </svg>
-                Scan QR to connect 小红书
-              </button>
+              <XHSAuthSection
+                onQR={() => setShowQR(true)}
+                onSave={(cookie) => {
+                  storeSession('xhs', cookie, '')
+                  setSessions(s => ({ ...s, xhs: { cookie, username: '' } }))
+                }}
+                isExpired={expiredPlatform === 'xhs'}
+              />
             )
           )}
 
@@ -402,6 +481,7 @@ function SetupScreen({ onAnalyze }: {
               session={session}
               onSave={handleDouyinSave}
               onClear={() => handleClearSession('douyin')}
+              isExpired={expiredPlatform === 'douyin' && !session.cookie}
             />
           )}
         </div>
@@ -420,11 +500,25 @@ function SetupScreen({ onAnalyze }: {
           </div>
         </div>
 
+        {/* Date range */}
+        <div style={styles.fieldGroup}>
+          <label style={styles.label}>POST DATE RANGE</label>
+          <select
+            style={styles.select}
+            value={dateRange}
+            onChange={e => setDateRange(e.target.value)}
+          >
+            {DATE_RANGE_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </div>
+
         {/* CTA */}
         <button
           style={{ ...styles.analyzeBtn, ...(canSubmit ? {} : styles.analyzeBtnDisabled) }}
           disabled={!canSubmit}
-          onClick={() => onAnalyze(keyword, session.cookie, maxNotes, platform)}
+          onClick={() => onAnalyze(keyword, session.cookie, maxNotes, platform, dateRange)}
         >
           <LensLogo size={20} />
           <span>Analyze "{keyword || '…'}" on {activePlatform.label}</span>
@@ -784,9 +878,10 @@ export default function App() {
   const [platform, setPlatform] = useState<Platform>('xhs')
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [expiredPlatform, setExpiredPlatform] = useState<Platform | undefined>()
   const esRef = useRef<EventSource | null>(null)
 
-  const handleAnalyze = useCallback((kw: string, cookie: string, maxNotes: number, plt: Platform) => {
+  const handleAnalyze = useCallback((kw: string, cookie: string, maxNotes: number, plt: Platform, dateRange: string) => {
     const platformLabel = PLATFORMS.find(p => p.id === plt)?.label ?? plt
     setKeyword(kw)
     setPlatform(plt)
@@ -800,6 +895,7 @@ export default function App() {
       cookie,
       max_notes: String(maxNotes),
       platform: plt,
+      date_range: dateRange,
     })
     const es = new EventSource(`/api/analyze?${params}`)
     esRef.current = es
@@ -820,7 +916,10 @@ export default function App() {
       try {
         const data = JSON.parse(e.data)
         setError(data.message || 'Something went wrong.')
-        if (data.code === 'auth') clearSession(plt)
+        if (data.code === 'auth') {
+          clearSession(plt)
+          setExpiredPlatform(plt)
+        }
       } catch {
         setError('Connection error. Please try again.')
       }
@@ -837,7 +936,7 @@ export default function App() {
     }
   }, [appState])
 
-  const handleCancel = useCallback(() => { esRef.current?.close(); setAppState('setup') }, [])
+  const handleCancel = useCallback(() => { esRef.current?.close(); setExpiredPlatform(undefined); setAppState('setup') }, [])
   const handleReset = useCallback(() => { esRef.current?.close(); setResult(null); setError(null); setAppState('setup') }, [])
 
   if (appState === 'loading') {
@@ -869,7 +968,7 @@ export default function App() {
     )
   }
 
-  return <SetupScreen onAnalyze={handleAnalyze} />
+  return <SetupScreen onAnalyze={handleAnalyze} expiredPlatform={expiredPlatform} />
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
@@ -906,9 +1005,11 @@ const styles: Record<string, React.CSSProperties> = {
   switchBtn: { fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.06em', color: 'var(--text-3)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 },
 
   qrLoginBtn: { display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '14px 16px', fontSize: '15px', fontWeight: 500, cursor: 'pointer', transition: 'border-color 0.2s, background 0.2s', fontFamily: 'var(--font-ui)', width: '100%', justifyContent: 'center' },
+  altAuthLink: { background: 'none', border: 'none', color: 'var(--text-3)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font-mono)', padding: '6px 0', textAlign: 'center' as const, letterSpacing: '0.02em' },
 
   // Douyin cookie section
   cookieSection: { display: 'flex', flexDirection: 'column', gap: '0', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' },
+  cookieExpiredBanner: { padding: '10px 16px', background: 'rgba(229,26,40,0.08)', borderBottom: '1px solid rgba(229,26,40,0.2)', fontSize: '13px', color: 'rgba(229,26,40,0.9)', fontFamily: 'var(--font-mono)', letterSpacing: '0.02em' },
   cookieToggle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'var(--bg-2)', border: 'none', cursor: 'pointer', color: 'var(--text)', fontSize: '15px', fontFamily: 'var(--font-ui)', fontWeight: 500 },
   cookieBody: { padding: '16px', background: 'var(--bg-1)', display: 'flex', flexDirection: 'column', gap: '12px', borderTop: '1px solid var(--border)' },
   cookieInstructions: { fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.7 },
@@ -933,6 +1034,7 @@ const styles: Record<string, React.CSSProperties> = {
   qrErrorMsg: { fontSize: '14px', color: 'rgba(229,26,40,0.9)', textAlign: 'center' as const, lineHeight: 1.5 },
   qrRetryBtn: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '10px 20px', fontSize: '14px', cursor: 'pointer', fontFamily: 'var(--font-ui)' },
 
+  select: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '14px 16px', color: 'var(--text)', fontSize: '14px', outline: 'none', width: '100%', cursor: 'pointer', fontFamily: 'var(--font-ui)', appearance: 'auto' as const },
   slider: { width: '100%', accentColor: 'var(--red)', cursor: 'pointer', height: '4px' },
   sliderVal: { fontFamily: 'var(--font-mono)', fontSize: '14px', color: 'var(--red)', fontWeight: 600, marginLeft: '4px' },
   sliderLabels: { display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-3)' },

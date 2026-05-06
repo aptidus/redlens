@@ -9,3 +9,4 @@ tenacity==9.0.0
 aiofiles==24.1.0
 python-dotenv==1.0.1
 qrcode[pil]==7.4.2
+playwright>=1.49.0

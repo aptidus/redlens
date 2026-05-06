@@ -3,16 +3,24 @@ Minimal XHS API client using cookie-based auth + xhshow signing.
 No Playwright required — pure HTTP calls once cookies are provided.
 """
 import asyncio
+import logging
+import os
 import random
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+
+logger = logging.getLogger(__name__)
 
 XHS_HOST = "https://edith.xiaohongshu.com"
 XHS_DOMAIN = "https://www.xiaohongshu.com"
+
+# Optional ISP/residential proxy (e.g. Oxylabs) to bypass server IP blocks.
+# Set OXYLABS_PROXY_URL=http://user:pass@disp.oxylabs.io:8004 in env.
+_PROXY_URL: Optional[str] = os.getenv("OXYLABS_PROXY_URL") or None
 
 # Semaphore to cap concurrent comment-fetching across notes
 _comment_semaphore = asyncio.Semaphore(3)
@@ -33,17 +41,29 @@ class XHSAuthError(XHSAPIError):
     """Authentication / session expired (codes -100, 9999, 401)."""
 
 
+class XHSPermissionError(XHSAPIError):
+    """Account-level permission denied (code -104). Account may be too new or restricted."""
+
+
 class XHSRateLimitError(XHSAPIError):
     """Rate limited by XHS (code 300012)."""
 
 
 _AUTH_CODES = {-100, 9999, 401}
 _RATE_LIMIT_CODES = {300012}
+_PERMISSION_CODES = {-104}
 
 
 def _raise_for_code(code: int, msg: str) -> None:
     if code in _AUTH_CODES:
         raise XHSAuthError(f"Auth error: {msg} (code {code})", code=code)
+    if code in _PERMISSION_CODES:
+        raise XHSPermissionError(
+            f"XHS account access denied (code {code}). "
+            "This usually means the account is too new or restricted. "
+            "Try: paste a fresh cookie from a more established account, or log out and log back in via QR.",
+            code=code,
+        )
     if code in _RATE_LIMIT_CODES:
         raise XHSRateLimitError(f"Rate limited: {msg} (code {code})", code=code)
     raise XHSAPIError(f"XHS API error: {msg} (code {code})", code=code)
@@ -87,6 +107,7 @@ def _sign_request(
                 a1 = part[3:].strip()
                 break
         if not a1:
+            logger.warning("XHS signing: no 'a1' cookie found — request will be unsigned")
             return {}
 
         method = "GET" if params is not None else "POST"
@@ -97,13 +118,15 @@ def _sign_request(
         xs_common = client.sign_xs_common(cookie_str)
         xt = str(int(time.time() * 1000))
         b3 = "".join(random.choices("0123456789abcdef", k=32))
+        logger.debug("XHS signing OK for %s (method=%s)", uri, method)
         return {
             "X-S": xs,
             "X-T": xt,
             "x-S-Common": xs_common,
             "X-B3-Traceid": b3,
         }
-    except Exception:
+    except Exception as exc:
+        logger.warning("XHS signing failed for %s: %s — request will be unsigned", uri, exc)
         return {}
 
 
@@ -114,7 +137,10 @@ def _sign_request(
 class XHSClient:
     def __init__(self, cookie_str: str):
         self.cookie_str = cookie_str
-        self._client = httpx.AsyncClient(timeout=30)
+        proxy = _PROXY_URL
+        if proxy:
+            logger.info("XHSClient using proxy: %s", proxy.split("@")[-1])
+        self._client = httpx.AsyncClient(timeout=30, proxy=proxy)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -122,7 +148,9 @@ class XHSClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=2, max=10),
-        retry=retry_if_exception_type(XHSAPIError),
+        retry=retry_if_exception(
+            lambda e: isinstance(e, XHSAPIError) and not isinstance(e, (XHSAuthError, XHSPermissionError))
+        ),
         reraise=True,
     )
     async def _get(self, uri: str, params: Dict) -> Any:
@@ -139,7 +167,9 @@ class XHSClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=2, max=10),
-        retry=retry_if_exception_type(XHSAPIError),
+        retry=retry_if_exception(
+            lambda e: isinstance(e, XHSAPIError) and not isinstance(e, (XHSAuthError, XHSPermissionError))
+        ),
         reraise=True,
     )
     async def _post(self, uri: str, payload: Dict) -> Any:
@@ -291,23 +321,32 @@ async def _fetch_comments_with_replies(
 # Public high-level entry point
 # ---------------------------------------------------------------------------
 
-async def scrape_keyword(
+def _date_cutoff(date_range: str) -> int:
+    """Return Unix timestamp cutoff (0 = no filter)."""
+    days = {"7d": 7, "30d": 30, "90d": 90, "180d": 180}.get(date_range, 0)
+    return int(time.time()) - days * 86400 if days else 0
+
+
+async def _scrape_keyword_http(
     cookie_str: str,
     keyword: str,
-    max_notes: int = 15,
-    max_comments_per_note: int = 30,
+    max_notes: int,
+    max_comments_per_note: int,
+    date_range: str,
 ) -> List[Dict]:
-    """
-    Search keyword → fetch top notes with comments + sub-comments.
-    Returns list of enriched note dicts ready for AI analysis.
-    """
+    """Inner HTTP-based scraper; raises XHSPermissionError on -104."""
+    cutoff = _date_cutoff(date_range)
     client = XHSClient(cookie_str)
     results = []
     try:
-        search_data = await client.search_notes(keyword, page_size=max_notes)
+        fetch_size = max_notes * 2 if cutoff else max_notes
+        search_data = await client.search_notes(keyword, page_size=min(fetch_size, 30))
         items = search_data.get("items", [])
 
-        # Kick off note fetches sequentially (search results need ordering)
+        if cutoff:
+            items = [it for it in items if _extract_time(it, "time") >= cutoff]
+            logger.info("Date filter (%s): %d items remain after cutoff %d", date_range, len(items), cutoff)
+
         for item in items[:max_notes]:
             note_id = item.get("id") or item.get("note_id", "")
             if not note_id:
@@ -341,6 +380,50 @@ async def scrape_keyword(
         await client.close()
 
     return results
+
+
+async def scrape_keyword(
+    cookie_str: str,
+    keyword: str,
+    max_notes: int = 15,
+    max_comments_per_note: int = 30,
+    date_range: str = "all",
+) -> List[Dict]:
+    """
+    Search keyword → fetch top notes with comments.
+    Tries the HTTP API first; if it gets -104 (IP blocked), falls back
+    to a Playwright browser that uses XHS's own JS for signing.
+    """
+    try:
+        return await _scrape_keyword_http(
+            cookie_str, keyword, max_notes, max_comments_per_note, date_range
+        )
+    except XHSPermissionError:
+        logger.warning(
+            "HTTP API returned -104 for %r — falling back to browser scraping", keyword
+        )
+        from xhs_playwright_scraper import scrape_xhs_via_browser
+        notes = await scrape_xhs_via_browser(
+            cookie_str, keyword, max_notes=max_notes, date_range=date_range
+        )
+        if not notes:
+            raise XHSPermissionError(
+                "XHS search is blocked on this server (code -104). "
+                "The browser fallback also returned no results — "
+                "please check that your account cookie is still valid and try again.",
+                code=-104,
+            )
+        # Try fetching comments via HTTP for each note (gracefully fails if also blocked)
+        client = XHSClient(cookie_str)
+        try:
+            for note in notes:
+                note["comments"] = await _fetch_comments_with_replies(
+                    client, note["note_id"], max_comments_per_note
+                )
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+        finally:
+            await client.close()
+        return notes
 
 
 # ---------------------------------------------------------------------------

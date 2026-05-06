@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from analyzer import analyze_notes
-from xhs_client import XHSAuthError, XHSRateLimitError, scrape_keyword
+from xhs_client import XHSAuthError, XHSPermissionError, XHSRateLimitError, scrape_keyword
 from douyin_client import DouyinAuthError, DouyinRateLimitError, scrape_douyin
 from login_manager import xhs_qr_login
 
@@ -106,7 +106,7 @@ async def validate_cookie(req: ValidateCookieRequest):
 
 
 @app.get("/api/analyze")
-async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platform: str = "xhs"):
+async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platform: str = "xhs", date_range: str = "all"):
     """SSE stream: crawl platform → AI analysis → done."""
     if not keyword.strip():
         raise HTTPException(400, "keyword required")
@@ -133,9 +133,9 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platfor
             })}
 
             if platform == "xhs":
-                notes = await scrape_keyword(cookie, keyword, max_notes=max_notes)
+                notes = await scrape_keyword(cookie, keyword, max_notes=max_notes, date_range=date_range)
             else:
-                notes = await scrape_douyin(cookie, keyword, max_notes=max_notes)
+                notes = await scrape_douyin(cookie, keyword, max_notes=max_notes, date_range=date_range)
 
             if not notes:
                 yield {"event": "error", "data": json.dumps({
@@ -170,6 +170,17 @@ async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platfor
 
             yield {"event": "done", "data": json.dumps(analysis)}
 
+        except XHSPermissionError as e:
+            yield {"event": "error", "data": json.dumps({
+                "message": (
+                    "XHS account access denied (code -104). "
+                    "This means XHS is blocking API calls from this server's IP address. "
+                    "Please reconnect via QR or paste a fresh cookie — "
+                    "the browser-based search fallback should handle it automatically. "
+                    "If the error persists, try logging out and scanning QR again."
+                ),
+                "code": "permission",
+            })}
         except (XHSAuthError, DouyinAuthError):
             yield {"event": "error", "data": json.dumps({
                 "message": f"Your {label} session has expired. Please reconnect.",

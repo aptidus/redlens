@@ -3,12 +3,20 @@ Douyin (抖音) content scraper — cookie-based auth, no Playwright.
 Uses Douyin's web API with standard browser headers.
 """
 import asyncio
+import logging
+import os
 import random
 import time
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 import httpx
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, retry_if_exception_type, stop_after_attempt, wait_exponential
+
+from xbogus import compute_xbogus
+
+logger = logging.getLogger(__name__)
+_PROXY_URL: Optional[str] = os.getenv("OXYLABS_PROXY_URL") or None
 
 DOUYIN_HOST = "https://www.douyin.com"
 
@@ -107,7 +115,10 @@ def _base_params() -> Dict[str, Any]:
 class DouyinClient:
     def __init__(self, cookie_str: str):
         self.cookie_str = cookie_str
-        self._client = httpx.AsyncClient(timeout=30)
+        proxy = _PROXY_URL
+        if proxy:
+            logger.info("DouyinClient using proxy: %s", proxy.split("@")[-1])
+        self._client = httpx.AsyncClient(timeout=30, proxy=proxy)
 
     async def close(self) -> None:
         await self._client.aclose()
@@ -115,11 +126,16 @@ class DouyinClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=2, max=10),
-        retry=retry_if_exception_type(DouyinAPIError),
+        retry=retry_if_exception(
+            lambda e: isinstance(e, DouyinAPIError) and not isinstance(e, DouyinAuthError)
+        ),
         reraise=True,
     )
     async def _get(self, path: str, params: Dict) -> Any:
         all_params = {**_base_params(), **params}
+        ua = _get_headers(self.cookie_str)["User-Agent"]
+        query_str = urlencode(all_params)
+        all_params["X-Bogus"] = compute_xbogus(query_str, ua)
         resp = await self._client.get(
             f"{DOUYIN_HOST}{path}",
             params=all_params,
@@ -228,26 +244,41 @@ async def _fetch_comments_with_replies(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def _date_cutoff(date_range: str) -> int:
+    days = {"7d": 7, "30d": 30, "90d": 90, "180d": 180}.get(date_range, 0)
+    return int(time.time()) - days * 86400 if days else 0
+
+
 async def scrape_douyin(
     cookie_str: str,
     keyword: str,
     max_notes: int = 15,
     max_comments_per_note: int = 20,
+    date_range: str = "all",
 ) -> List[Dict]:
     """
     Search keyword on Douyin → fetch top videos with comments.
     Returns list of enriched video dicts ready for AI analysis.
     """
+    cutoff = _date_cutoff(date_range)
     client = DouyinClient(cookie_str)
     results = []
     try:
-        search_data = await client.search_videos(keyword, count=max_notes)
+        fetch_count = max_notes * 2 if cutoff else max_notes
+        search_data = await client.search_videos(keyword, count=min(fetch_count, 30))
         items = search_data.get("data") or []
 
-        for item in items[:max_notes]:
+        for item in items:
+            if len(results) >= max_notes:
+                break
+
             info = item.get("aweme_info") or item
             aweme_id = info.get("aweme_id", "")
             if not aweme_id:
+                continue
+
+            create_time = info.get("create_time", 0)
+            if cutoff and create_time and create_time < cutoff:
                 continue
 
             stats = info.get("statistics") or {}
@@ -275,6 +306,7 @@ async def scrape_douyin(
                 "cover_url": cover_url,
                 "tags": tags,
                 "duration": video.get("duration", 0),  # milliseconds
+                "create_time": create_time,
                 "comments": [],
             }
 
@@ -282,7 +314,8 @@ async def scrape_douyin(
                 client, aweme_id, max_comments_per_note
             )
             results.append(note)
-            await asyncio.sleep(random.uniform(0.5, 1.5))
+            if len(results) < max_notes:
+                await asyncio.sleep(random.uniform(0.5, 1.5))
 
     finally:
         await client.close()
