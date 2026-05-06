@@ -4,6 +4,7 @@ Uses budget_tokens (not max_tokens) to control output length — reasoning runs 
 """
 import json
 import os
+import re
 from typing import Any, Dict, List
 
 import httpx
@@ -18,6 +19,7 @@ async def analyze_notes(keyword: str, notes: List[Dict]) -> Dict[str, Any]:
     Send scraped notes to mimo-v2.5 and get a structured analysis report.
     Returns a dict with keys: summary, top_patterns, content_insights,
     comment_insights, suggested_angles, hook_examples, metrics_summary.
+    Raises RuntimeError on any transport or API failure.
     """
     notes_text = _format_notes_for_prompt(notes)
 
@@ -54,7 +56,8 @@ Return a JSON object with exactly these keys:
     "best_content_formats": ["<format 1 with explanation>", "<format 2>"],
     "optimal_length": "<observation about post length vs engagement>",
     "visual_patterns": "<what type of cover images/videos performed best>",
-    "key_keywords_used": ["<keyword1>", "<keyword2>", "<keyword3>", "<keyword4>", "<keyword5>"]
+    "key_keywords_used": ["<keyword1>", "<keyword2>", "<keyword3>", "<keyword4>", "<keyword5>"],
+    "trending_tags": ["<tag1>", "<tag2>", "<tag3>"]
   }},
   "comment_insights": {{
     "top_pain_points": ["<pain point 1>", "<pain point 2>", "<pain point 3>"],
@@ -95,33 +98,46 @@ Return a JSON object with exactly these keys:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "budget_tokens": 2000,
+        "budget_tokens": 3000,
         "response_format": {"type": "json_object"},
     }
 
-    async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            f"{MIMO_BASE_URL}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {MIMO_API_KEY}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    try:
+        async with httpx.AsyncClient(timeout=120) as client:
+            resp = await client.post(
+                f"{MIMO_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {MIMO_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(
+            f"AI analysis failed: HTTP {exc.response.status_code} from {exc.request.url}"
+        ) from exc
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"AI analysis failed: request error — {exc}") from exc
 
-    content = data["choices"][0]["message"]["content"]
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except (KeyError, IndexError) as exc:
+        raise RuntimeError(f"AI analysis failed: unexpected response shape — {exc}") from exc
+
     usage = data.get("usage", {})
 
     try:
         analysis = json.loads(content)
     except json.JSONDecodeError:
         # Strip any accidental markdown fences
-        import re
         content = re.sub(r"^```(?:json)?\s*", "", content.strip())
         content = re.sub(r"\s*```$", "", content)
-        analysis = json.loads(content)
+        try:
+            analysis = json.loads(content)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"AI analysis failed: could not parse JSON response — {exc}") from exc
 
     analysis["_meta"] = {
         "model": data.get("model", MIMO_MODEL),
@@ -138,18 +154,30 @@ def _format_notes_for_prompt(notes: List[Dict]) -> str:
     for i, note in enumerate(notes, 1):
         lines.append(f"--- POST {i} ---")
         lines.append(f"Title: {note.get('title', 'N/A')}")
-        if note.get("desc"):
-            lines.append(f"Content: {note['desc'][:300]}")
-        lines.append(f"Type: {note.get('type', 'normal')}")
-        lines.append(f"Likes: {note.get('liked_count', 0)} | Collects: {note.get('collected_count', 0)} | Comments: {note.get('comment_count', 0)} | Shares: {note.get('share_count', 0)}")
-        lines.append(f"Creator: {note.get('user', 'N/A')}")
+
+        tags = note.get("tags", [])
+        if tags:
+            lines.append("Tags: " + " ".join(f"#{t}" for t in tags))
+
+        desc = note.get("desc", "")
+        if desc:
+            lines.append(f"Content: {desc[:400]}")
+
+        lines.append(
+            f"Likes: {note.get('liked_count', 0)} | "
+            f"Collects: {note.get('collected_count', 0)} | "
+            f"Comments: {note.get('comment_count', 0)} | "
+            f"Shares: {note.get('share_count', 0)}"
+        )
+        lines.append(f"Creator: {note.get('user', 'N/A')} | Type: {note.get('type', 'normal')}")
 
         comments = note.get("comments", [])
         if comments:
-            lines.append(f"Top Comments ({len(comments)}):")
+            lines.append(f"Comments ({len(comments)}):")
             for c in comments[:10]:
-                if c.get("content"):
-                    lines.append(f"  [{c.get('liked_count', 0)} likes] {c['content'][:100]}")
+                content_text = c.get("content", "")[:120]
+                prefix = "  ↳ [REPLY]" if c.get("is_reply") else "  "
+                lines.append(f"{prefix}[{c.get('liked_count', 0)} likes] {content_text}")
 
         lines.append("")
 

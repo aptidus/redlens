@@ -788,8 +788,11 @@ export default function App() {
       try {
         const data = JSON.parse(e.data)
         setError(data.message || 'Something went wrong.')
+        if (data.code === 'auth') {
+          clearCookie() // session expired — force re-scan
+        }
       } catch {
-        setError('Connection error. Please check your cookie and try again.')
+        setError('Connection error. Please try again.')
       }
       setAppState('error')
       es.close()
