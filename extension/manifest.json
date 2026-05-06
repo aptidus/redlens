@@ -1,21 +1,22 @@
 {
   "manifest_version": 3,
-  "name": "RedLens Cookie Grabber",
-  "version": "1.0.0",
-  "description": "One-click copy of your full xiaohongshu.com cookie (including httpOnly) for use with RedLens.",
-  "permissions": ["cookies", "clipboardWrite"],
+  "name": "RedLens Cookie Connect",
+  "version": "1.1.0",
+  "description": "One-click connect your xiaohongshu.com session to RedLens. No copy-paste.",
+  "permissions": ["cookies", "storage"],
   "host_permissions": [
     "https://*.xiaohongshu.com/*"
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "RedLens Cookie Grabber",
+    "default_title": "RedLens Cookie Connect",
     "default_icon": {
       "16": "icon.png",
       "48": "icon.png",
       "128": "icon.png"
     }
   },
+  "options_page": "options.html",
   "icons": {
     "16": "icon.png",
     "48": "icon.png",

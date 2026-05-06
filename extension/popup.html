@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>RedLens Cookie Grabber</title>
+  <title>RedLens</title>
   <style>
     :root {
       --bg: #080809;
@@ -25,10 +25,11 @@
     }
     .wrap { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
     .header {
-      display: flex; align-items: center; gap: 8px;
+      display: flex; align-items: center; justify-content: space-between;
       padding-bottom: 12px;
       border-bottom: 1px solid var(--border);
     }
+    .brand { display: flex; align-items: center; gap: 8px; }
     .lens {
       width: 22px; height: 22px;
       border: 1.5px solid var(--red);
@@ -43,6 +44,16 @@
       background: var(--red);
     }
     .title { font-weight: 700; letter-spacing: -0.01em; }
+    .settings-link {
+      font-size: 11px;
+      color: var(--text-3);
+      text-decoration: none;
+      cursor: pointer;
+      background: none;
+      border: none;
+      font-family: inherit;
+    }
+    .settings-link:hover { color: var(--text); }
     .status {
       padding: 10px 12px;
       background: var(--bg-1);
@@ -55,26 +66,41 @@
     }
     .status.ok { border-color: rgba(62,207,142,0.3); background: rgba(62,207,142,0.06); color: var(--green); }
     .status.err { border-color: rgba(229,26,40,0.3); background: rgba(229,26,40,0.06); color: var(--red); }
-    button {
+    button.send {
       background: var(--red);
       color: #fff;
       border: none;
       border-radius: 8px;
-      padding: 12px 14px;
+      padding: 14px 14px;
       font-weight: 600;
-      font-size: 13px;
+      font-size: 14px;
       cursor: pointer;
       font-family: inherit;
       transition: opacity 0.15s;
     }
-    button:hover { opacity: 0.92; }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    button.send:hover { opacity: 0.92; }
+    button.send:disabled { opacity: 0.4; cursor: not-allowed; }
+    .secondary {
+      background: var(--bg-2);
+      color: var(--text-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: inherit;
+    }
     .meta {
       font-size: 11px;
       color: var(--text-3);
       line-height: 1.5;
     }
-    .meta strong { color: var(--text-2); }
+    .target {
+      font-size: 10px;
+      color: var(--text-3);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      word-break: break-all;
+    }
     code {
       background: var(--bg-2);
       padding: 1px 5px;
@@ -88,12 +114,18 @@
 <body>
   <div class="wrap">
     <div class="header">
-      <div class="lens"></div>
-      <div class="title">RedLens Cookie Grabber</div>
+      <div class="brand">
+        <div class="lens"></div>
+        <div class="title">RedLens</div>
+      </div>
+      <button class="settings-link" id="settings">Settings</button>
     </div>
-    <div id="status" class="status">Reading xiaohongshu.com cookies…</div>
-    <button id="copy" disabled>Copy cookie to clipboard</button>
-    <div class="meta" id="meta"></div>
+    <div id="status" class="status">Reading cookies…</div>
+    <button class="send" id="send" disabled>Connect to RedLens</button>
+    <button class="secondary" id="copy">Or copy to clipboard</button>
+    <div class="meta">
+      Sends to: <span class="target" id="target"></span>
+    </div>
   </div>
   <script src="popup.js"></script>
 </body>

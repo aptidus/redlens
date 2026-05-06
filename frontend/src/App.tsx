@@ -327,19 +327,17 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
     <div style={styles.cookieSection}>
       <div style={styles.cookieBody}>
         <div style={styles.bookmarkletBox}>
-          <p style={styles.bookmarkletTitle}>Easiest: install the cookie grabber extension</p>
+          <p style={styles.bookmarkletTitle}>One-click connect with the RedLens extension</p>
           <ol style={styles.bookmarkletSteps}>
             <li>Download <a href="https://github.com/aptidus/redlens/tree/main/extension" target="_blank" rel="noreferrer" style={{ color: 'var(--red)' }}>the <code>extension/</code> folder</a> from the repo</li>
-            <li>Chrome → <code>chrome://extensions</code> → enable <strong>Developer mode</strong></li>
-            <li>Click <strong>Load unpacked</strong> → pick the folder</li>
-            <li>Log into <strong>xiaohongshu.com</strong>, click the extension icon, copy</li>
-            <li>Paste below</li>
+            <li>Chrome → <code>chrome://extensions</code> → enable <strong>Developer mode</strong> → <strong>Load unpacked</strong> → pick the folder</li>
+            <li>Log into <strong>xiaohongshu.com</strong> in any tab</li>
+            <li>Click the extension icon → <strong>Connect to RedLens</strong></li>
+            <li>RedLens opens with your account already connected. Done.</li>
           </ol>
           <p style={styles.bookmarkletNote}>
-            Or manually: F12 → <strong>Network</strong> tab → click <strong>Fetch/XHR</strong> filter →
-            reload → click any <code>xiaohongshu.com</code> API request →
-            Request Headers → copy <code>cookie:</code> value.
-            Static image (CDN) requests have no cookie — pick an XHR.
+            Manual fallback: F12 → <strong>Network</strong> → click <strong>Fetch/XHR</strong> filter →
+            reload → click any <code>xiaohongshu.com</code> API request → Request Headers → copy <code>cookie:</code> value → paste below.
           </p>
         </div>
         <textarea
@@ -908,7 +906,33 @@ export default function App() {
   const [result, setResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expiredPlatform, setExpiredPlatform] = useState<Platform | undefined>()
+  const [extensionToast, setExtensionToast] = useState<string | null>(null)
   const esRef = useRef<EventSource | null>(null)
+
+  // Detect cookie sent by the RedLens browser extension via URL fragment
+  // (#xhs_cookie=...). Fragments are not sent to the server, so this never
+  // hits server logs. Save it, scrub the URL, show a toast.
+  useEffect(() => {
+    const hash = window.location.hash
+    const match = hash.match(/[#&]xhs_cookie=([^&]+)/)
+    if (!match) return
+    try {
+      const cookie = decodeURIComponent(match[1])
+      if (cookie.includes('web_session=') && cookie.includes('a1=')) {
+        storeSession('xhs', cookie, '')
+        setExtensionToast('小红书 connected via extension')
+        setTimeout(() => setExtensionToast(null), 4000)
+      } else {
+        setExtensionToast('Extension cookie was incomplete (missing web_session or a1)')
+        setTimeout(() => setExtensionToast(null), 5000)
+      }
+    } catch (e) {
+      console.error('Failed to parse extension cookie:', e)
+    } finally {
+      // Strip the fragment from URL without adding history
+      history.replaceState(null, '', window.location.pathname + window.location.search)
+    }
+  }, [])
 
   const handleAnalyze = useCallback((kw: string, cookie: string, maxNotes: number, plt: Platform, dateRange: string) => {
     const platformLabel = PLATFORMS.find(p => p.id === plt)?.label ?? plt
@@ -997,7 +1021,17 @@ export default function App() {
     )
   }
 
-  return <SetupScreen onAnalyze={handleAnalyze} expiredPlatform={expiredPlatform} />
+  return (
+    <>
+      <SetupScreen onAnalyze={handleAnalyze} expiredPlatform={expiredPlatform} />
+      {extensionToast && (
+        <div style={styles.extensionToast}>
+          <span style={{ color: 'var(--green)' }}>✓</span>
+          <span>{extensionToast}</span>
+        </div>
+      )}
+    </>
+  )
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
@@ -1049,6 +1083,7 @@ const styles: Record<string, React.CSSProperties> = {
   bookmarkletSteps: { fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.9, paddingLeft: '20px', margin: 0 },
   bookmarkletNote: { fontSize: '11px', color: 'var(--text-3)', lineHeight: 1.6, marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed rgba(229,26,40,0.15)' },
   validationError: { padding: '10px 12px', background: 'rgba(229,26,40,0.1)', border: '1px solid rgba(229,26,40,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '13px', color: 'rgba(229,26,40,0.95)', lineHeight: 1.5 },
+  extensionToast: { position: 'fixed' as const, bottom: '24px', right: '24px', display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 18px', background: 'rgba(8,8,9,0.95)', border: '1px solid rgba(62,207,142,0.3)', borderRadius: '10px', fontSize: '14px', color: 'var(--text)', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', backdropFilter: 'blur(10px)', zIndex: 1000, fontFamily: 'var(--font-ui)', animation: 'fade-up 0.3s ease' },
 
   // QR Modal
   qrOverlay: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, padding: '24px', animation: 'fade-up 0.2s ease' },
