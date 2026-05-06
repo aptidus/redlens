@@ -327,18 +327,19 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
     <div style={styles.cookieSection}>
       <div style={styles.cookieBody}>
         <div style={styles.bookmarkletBox}>
-          <p style={styles.bookmarkletTitle}>How to get your XHS cookie (Network tab method)</p>
+          <p style={styles.bookmarkletTitle}>Easiest: install the cookie grabber extension</p>
           <ol style={styles.bookmarkletSteps}>
-            <li>Log into <strong>xiaohongshu.com</strong> in Chrome</li>
-            <li>Press <code>F12</code> → click <strong>Network</strong> tab</li>
-            <li>Reload the page (<code>Cmd/Ctrl + R</code>)</li>
-            <li>Click any request to <code>xiaohongshu.com</code> in the list</li>
-            <li>Scroll to <strong>Request Headers</strong> → find <code>cookie:</code></li>
-            <li>Right-click the value → <strong>Copy value</strong> → paste below</li>
+            <li>Download <a href="https://github.com/aptidus/redlens/tree/main/extension" target="_blank" rel="noreferrer" style={{ color: 'var(--red)' }}>the <code>extension/</code> folder</a> from the repo</li>
+            <li>Chrome → <code>chrome://extensions</code> → enable <strong>Developer mode</strong></li>
+            <li>Click <strong>Load unpacked</strong> → pick the folder</li>
+            <li>Log into <strong>xiaohongshu.com</strong>, click the extension icon, copy</li>
+            <li>Paste below</li>
           </ol>
           <p style={styles.bookmarkletNote}>
-            Must include both <code>web_session=</code> and <code>a1=</code>.
-            DevTools/Application tab won't show <code>web_session</code> — only Network does.
+            Or manually: F12 → <strong>Network</strong> tab → click <strong>Fetch/XHR</strong> filter →
+            reload → click any <code>xiaohongshu.com</code> API request →
+            Request Headers → copy <code>cookie:</code> value.
+            Static image (CDN) requests have no cookie — pick an XHR.
           </p>
         </div>
         <textarea
