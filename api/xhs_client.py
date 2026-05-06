@@ -73,17 +73,35 @@ def _sign_request(
     payload: Optional[Dict] = None,
     cookie_str: str = "",
 ) -> Dict[str, str]:
-    """Generate X-S / X-T headers via xhshow pure-algorithm library."""
+    """Generate X-S / X-T headers via xhshow library."""
     try:
-        from xhshow import XhsShow  # type: ignore[import]
+        import random
+        import time
+
+        from xhshow import Xhshow  # type: ignore[import]
+
+        a1 = ""
+        for part in cookie_str.split(";"):
+            part = part.strip()
+            if part.startswith("a1="):
+                a1 = part[3:].strip()
+                break
+        if not a1:
+            return {}
+
         method = "GET" if params is not None else "POST"
         data = params if params is not None else payload
-        result = XhsShow().sign(uri=uri, data=data, cookie_str=cookie_str, method=method)
+
+        client = Xhshow()
+        xs = client.sign_xs(method=method, uri=uri, a1_value=a1, payload=data)
+        xs_common = client.sign_xs_common(cookie_str)
+        xt = str(int(time.time() * 1000))
+        b3 = "".join(random.choices("0123456789abcdef", k=32))
         return {
-            "X-S": result.get("x-s", ""),
-            "X-T": str(result.get("x-t", "")),
-            "x-S-Common": result.get("x-s-common", ""),
-            "X-B3-Traceid": result.get("x-b3-traceid", ""),
+            "X-S": xs,
+            "X-T": xt,
+            "x-S-Common": xs_common,
+            "X-B3-Traceid": b3,
         }
     except Exception:
         return {}

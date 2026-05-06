@@ -7,6 +7,8 @@ import base64
 import io
 import json
 import logging
+import random
+import time
 from typing import AsyncGenerator
 
 import httpx
@@ -30,19 +32,58 @@ _BASE_HEADERS = {
 }
 
 
-def _sign(uri: str, data=None, cookie_str: str = "") -> dict:
+def _extract_a1(cookie_str: str) -> str:
+    for part in cookie_str.split(";"):
+        part = part.strip()
+        if part.startswith("a1="):
+            return part[3:].strip()
+    return ""
+
+
+def _cookies_to_str(client: httpx.AsyncClient) -> str:
+    return "; ".join(f"{k}={v}" for k, v in client.cookies.items())
+
+
+def _sign(uri: str, payload=None, cookie_str: str = "") -> dict:
+    """Generate X-S / X-T signing headers. Returns {} if signing not possible."""
     try:
-        from xhshow import XhsShow
-        method = "POST" if data is not None else "GET"
-        result = XhsShow().sign(uri=uri, data=data, cookie_str=cookie_str, method=method)
+        from xhshow import Xhshow  # type: ignore[import]
+
+        a1 = _extract_a1(cookie_str)
+        if not a1:
+            return {}
+
+        method = "POST" if payload is not None else "GET"
+        xhshow = Xhshow()
+        xs = xhshow.sign_xs(method=method, uri=uri, a1_value=a1, payload=payload)
+        xs_common = xhshow.sign_xs_common(cookie_str)
         return {
-            "X-S": result.get("x-s", ""),
-            "X-T": str(result.get("x-t", "")),
-            "x-S-Common": result.get("x-s-common", ""),
+            "X-S": xs,
+            "X-T": str(int(time.time() * 1000)),
+            "x-S-Common": xs_common,
         }
     except Exception as e:
         logger.warning("xhshow sign failed: %s", e)
         return {}
+
+
+async def _init_session(client: httpx.AsyncClient) -> str:
+    """
+    Visit XHS homepage to receive initial tracking cookies (a1, webId, etc.).
+    Returns cookie string with a1 populated.
+    """
+    try:
+        await client.get(XHS_DOMAIN, follow_redirects=True, timeout=15)
+        cookie_str = _cookies_to_str(client)
+        a1 = _extract_a1(cookie_str)
+        if a1:
+            logger.info("Got initial XHS session (a1=%s…)", a1[:8])
+        else:
+            logger.warning("XHS homepage did not set a1 cookie")
+        return cookie_str
+    except Exception as e:
+        logger.warning("Failed to init XHS session: %s", e)
+        return ""
 
 
 def _make_qr_image(url: str) -> str:
@@ -70,12 +111,16 @@ async def xhs_qr_login() -> AsyncGenerator[dict, None]:
             follow_redirects=True,
         ) as client:
 
+            # ── Step 0: Get initial session cookies ──────────────────────────
+            cookie_str = await _init_session(client)
+
             # ── Step 1: Create QR token ──────────────────────────────────────
             create_uri = "/api/sns/web/v1/login/qrcode/create"
+            sign_hdrs = _sign(create_uri, payload={}, cookie_str=cookie_str)
             resp = await client.post(
                 f"{XHS_HOST}{create_uri}",
                 json={},
-                headers=_sign(create_uri, data={}),
+                headers=sign_hdrs,
             )
             body = resp.json()
             logger.info("QR create response: %s", body)
@@ -102,21 +147,23 @@ async def xhs_qr_login() -> AsyncGenerator[dict, None]:
 
             # ── Step 3: Poll for confirmation ────────────────────────────────
             status_path = "/api/sns/web/v1/login/qrcode/status"
-            status_qs = f"{status_path}?qr_id={qr_id}&code={code}"
 
             for elapsed in range(0, QR_TIMEOUT, 2):
                 await asyncio.sleep(2)
 
+                # Refresh cookie string (client may have new cookies from prior responses)
+                cookie_str = _cookies_to_str(client)
+                sign_hdrs = _sign(status_path, cookie_str=cookie_str)
+
                 st_resp = await client.get(
                     f"{XHS_HOST}{status_path}",
                     params={"qr_id": qr_id, "code": code},
-                    headers=_sign(status_qs),
+                    headers=sign_hdrs,
                 )
                 st_body = st_resp.json()
                 logger.debug("QR status [%ds]: %s", elapsed, st_body)
 
                 if not st_body.get("success"):
-                    # Still waiting — keep polling
                     remaining = QR_TIMEOUT - elapsed
                     if elapsed > 0 and elapsed % 20 == 0:
                         yield {"event": "status", "data": json.dumps({
@@ -129,13 +176,10 @@ async def xhs_qr_login() -> AsyncGenerator[dict, None]:
                 code_success = data.get("code_success", 0)
 
                 if login_info or code_success == 1:
-                    # Authenticated — extract session cookies
                     await asyncio.sleep(1)
-                    cookies = dict(client.cookies)
-                    cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+                    cookie_str = _cookies_to_str(client)
                     username = (
-                        login_info.get("nickname") or
-                        login_info.get("username") or ""
+                        login_info.get("nickname") or login_info.get("username") or ""
                         if isinstance(login_info, dict) else ""
                     )
                     yield {"event": "authenticated", "data": json.dumps({
