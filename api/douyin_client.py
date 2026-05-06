@@ -278,6 +278,8 @@ async def scrape_douyin(
                 continue
 
             create_time = info.get("create_time", 0)
+            # Skip filter when create_time is missing — Douyin's search list
+            # often omits it; trust the API's default ordering instead.
             if cutoff and create_time and create_time < cutoff:
                 continue
 

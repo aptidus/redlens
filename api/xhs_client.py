@@ -187,13 +187,15 @@ class XHSClient:
     # API methods
     # ------------------------------------------------------------------
 
-    async def search_notes(self, keyword: str, page: int = 1, page_size: int = 20) -> Dict:
+    async def search_notes(
+        self, keyword: str, page: int = 1, page_size: int = 20, sort: str = "general"
+    ) -> Dict:
         payload = {
             "keyword": keyword,
             "page": page,
             "page_size": page_size,
             "search_id": _generate_search_id(),
-            "sort": "general",
+            "sort": sort,
             "note_type": 0,
         }
         return await self._post("/api/sns/web/v1/search/notes", payload)
@@ -339,13 +341,24 @@ async def _scrape_keyword_http(
     client = XHSClient(cookie_str)
     results = []
     try:
-        fetch_size = max_notes * 2 if cutoff else max_notes
-        search_data = await client.search_notes(keyword, page_size=min(fetch_size, 30))
+        # When date filter is active, ask XHS to sort newest-first so we get recent posts.
+        sort = "time_descending" if cutoff else "general"
+        search_data = await client.search_notes(
+            keyword, page_size=min(max_notes, 30), sort=sort
+        )
         items = search_data.get("items", [])
+        logger.info("XHS search returned %d raw items (sort=%s)", len(items), sort)
 
         if cutoff:
-            items = [it for it in items if _extract_time(it, "time") >= cutoff]
-            logger.info("Date filter (%s): %d items remain after cutoff %d", date_range, len(items), cutoff)
+            # Search-list responses don't include create_time, so only filter
+            # the items that DO have a usable time; keep the rest in sort order.
+            filtered = []
+            for it in items:
+                t = _extract_time(it, "time")
+                if t == 0 or t >= cutoff:
+                    filtered.append(it)
+            items = filtered
+            logger.info("After date filter (%s, cutoff=%d): %d items", date_range, cutoff, len(items))
 
         for item in items[:max_notes]:
             note_id = item.get("id") or item.get("note_id", "")
