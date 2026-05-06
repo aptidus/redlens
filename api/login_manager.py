@@ -65,18 +65,46 @@ _USER_AGENT = (
 )
 
 
-async def _find_qr_element(page):
-    """Try each selector in order; return the first element found, or None."""
-    for selector in _QR_SELECTORS:
+async def _find_qr_bbox(page):
+    """
+    Find the QR's bounding box. Prefer canvas elements (always rendered square)
+    and reject anything that isn't roughly 1:1 — the previous selectors matched
+    a non-square wrapper which caused a clipped/stretched QR.
+    """
+    selectors = [
+        "canvas",                        # XHS renders the QR to a canvas
+        ".qrcode-img canvas",
+        ".qrcode-img img",
+        "img[class*='qrcode']",
+        "img[class*='qr']",
+        ".login-container canvas",
+        ".login-container img",
+        ".qrcode-img",
+    ]
+    for selector in selectors:
         try:
-            el = await page.wait_for_selector(selector, timeout=2000, state="visible")
-            if el:
-                logger.info("QR element found with selector: %s", selector)
-                return el
-        except PlaywrightTimeoutError:
-            continue
+            elements = await page.query_selector_all(selector)
+            for el in elements:
+                try:
+                    if not await el.is_visible():
+                        continue
+                    bbox = await el.bounding_box()
+                except Exception:
+                    continue
+                if not bbox:
+                    continue
+                w, h = bbox.get("width", 0), bbox.get("height", 0)
+                if w < 100 or h < 100:
+                    continue
+                ratio = w / h
+                if 0.85 <= ratio <= 1.15:
+                    logger.info(
+                        "QR element accepted: selector=%s size=%.0fx%.0f", selector, w, h
+                    )
+                    return bbox
         except Exception as e:
             logger.debug("Selector %s error: %s", selector, e)
+    logger.warning("No square QR element found across selectors")
     return None
 
 
@@ -151,21 +179,29 @@ async def xhs_qr_login() -> AsyncGenerator[dict, None]:
 
         yield {"event": "status", "data": json.dumps({"message": "Waiting for QR code…"})}
 
-        # Wait up to QR_WAIT seconds for the QR element
-        qr_el = None
+        # Wait up to QR_WAIT seconds for a square QR element to appear
+        bbox = None
         deadline = asyncio.get_event_loop().time() + QR_WAIT
         while asyncio.get_event_loop().time() < deadline:
-            qr_el = await _find_qr_element(page)
-            if qr_el:
+            bbox = await _find_qr_bbox(page)
+            if bbox:
                 break
             await asyncio.sleep(1)
 
-        if qr_el is None:
-            # Fall back: screenshot the full page and crop nothing — send the whole viewport
-            logger.warning("QR element not found; sending full-page screenshot")
+        if bbox is None:
+            logger.warning("No square QR found; sending full-page screenshot")
             img_bytes = await page.screenshot(type="png")
         else:
-            img_bytes = await qr_el.screenshot(type="png")
+            # Clip the page screenshot using the QR's exact bounds plus a small
+            # white-quiet-zone padding so phone scanners can lock on cleanly.
+            pad = 12
+            clip = {
+                "x": max(0, bbox["x"] - pad),
+                "y": max(0, bbox["y"] - pad),
+                "width": bbox["width"] + 2 * pad,
+                "height": bbox["height"] + 2 * pad,
+            }
+            img_bytes = await page.screenshot(type="png", clip=clip)
 
         b64 = base64.b64encode(img_bytes).decode()
         qr_data_uri = f"data:image/png;base64,{b64}"
