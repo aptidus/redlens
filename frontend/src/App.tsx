@@ -307,14 +307,24 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
     )
   }
 
+  // Bookmarklet that runs in the user's browser on xiaohongshu.com,
+  // copies their full cookie string to clipboard, then prompts to paste here.
+  const bookmarkletHref = `javascript:(function(){var c=document.cookie;if(!c){alert('No cookies found. Make sure you are logged in to xiaohongshu.com first.')}else{navigator.clipboard.writeText(c).then(function(){alert('Cookie copied! Go back to RedLens and paste it.')},function(){prompt('Copy this cookie string:',c)})}})();`
+
   return (
     <div style={styles.cookieSection}>
       <div style={styles.cookieBody}>
-        <p style={styles.cookieInstructions}>
-          1. Open <strong>xiaohongshu.com</strong> in Chrome (logged in)<br />
-          2. Press <code>F12</code> → Network tab → reload the page<br />
-          3. Click any request → Headers → find <code>Cookie:</code><br />
-          4. Copy the full value and paste below
+        <div style={styles.bookmarkletBox}>
+          <p style={styles.bookmarkletTitle}>Quickest way — 1-click cookie grabber:</p>
+          <ol style={styles.bookmarkletSteps}>
+            <li>Drag this button to your bookmarks bar: <a href={bookmarkletHref} style={styles.bookmarkletBtn} onClick={e => e.preventDefault()}>Get XHS Cookie</a></li>
+            <li>Log into <strong>xiaohongshu.com</strong> in your browser</li>
+            <li>Click the bookmark — it copies your cookie instantly</li>
+            <li>Paste below</li>
+          </ol>
+        </div>
+        <p style={{ ...styles.cookieInstructions, marginTop: '8px' }}>
+          Or manually: F12 → Network → any request → Headers → copy <code>Cookie:</code> value
         </p>
         <textarea
           style={styles.cookieTextarea}
@@ -1015,6 +1025,10 @@ const styles: Record<string, React.CSSProperties> = {
   cookieInstructions: { fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.7 },
   cookieTextarea: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '12px', color: 'var(--text)', fontSize: '13px', fontFamily: 'var(--font-mono)', resize: 'vertical' as const, outline: 'none', width: '100%' },
   cookieSaveBtn: { background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '10px 20px', fontSize: '14px', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui)', alignSelf: 'flex-end' },
+  bookmarkletBox: { background: 'rgba(229,26,40,0.05)', border: '1px solid rgba(229,26,40,0.15)', borderRadius: 'var(--radius-sm)', padding: '14px 16px' },
+  bookmarkletTitle: { fontSize: '12px', fontWeight: 600, color: 'var(--text)', marginBottom: '8px', fontFamily: 'var(--font-mono)', letterSpacing: '0.04em' },
+  bookmarkletSteps: { fontSize: '13px', color: 'var(--text-2)', lineHeight: 1.8, paddingLeft: '18px', margin: 0 },
+  bookmarkletBtn: { display: 'inline-block', background: 'var(--red)', color: '#fff', padding: '4px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: 600, textDecoration: 'none', cursor: 'grab', fontFamily: 'var(--font-ui)', userSelect: 'none' as const },
 
   // QR Modal
   qrOverlay: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, padding: '24px', animation: 'fade-up 0.2s ease' },

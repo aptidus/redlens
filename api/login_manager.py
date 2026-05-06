@@ -114,7 +114,8 @@ async def xhs_qr_login() -> AsyncGenerator[dict, None]:
         browser = await playwright.chromium.launch(
             headless=True,
             args=_STEALTH_ARGS,
-            proxy=_playwright_proxy_config(),
+            # No proxy here — QR scan confirmation uses XHS's own JS long-poll,
+            # which breaks through ISP proxies. API calls use the proxy separately.
         )
         context = await browser.new_context(
             locale="zh-CN",
