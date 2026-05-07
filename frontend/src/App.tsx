@@ -452,9 +452,7 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
         )}
       </div>
 
-      <footer style={styles.setupFooter}>
-        {T.footer_text} <strong>mimo-v2.5</strong> · {T.research_only}
-      </footer>
+      <footer style={styles.setupFooter}>{T.research_only}</footer>
     </div>
   )
 }
@@ -783,12 +781,7 @@ function ReportScreen({ result, keyword, onReset }: {
 
         <footer style={styles.reportFooter}>
           <LensLogo size={20} />
-          <span>NicheLens · Powered by <strong>mimo-v2.5</strong> · For research and learning only</span>
-          {result._meta && (
-            <span style={styles.tokenMeta}>
-              {T.tokens_used(result._meta.prompt_tokens + result._meta.completion_tokens)}
-            </span>
-          )}
+          <span>NicheLens · For research and learning only</span>
         </footer>
       </div>
     </div>
