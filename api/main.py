@@ -1,3 +1,4 @@
+import base64
 import json
 import logging
 import os
@@ -6,9 +7,9 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Header, Depends
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -61,6 +62,47 @@ def require_internal_token(x_internal_token: str = Header(default="")) -> None:
         return
     if not secrets.compare_digest(x_internal_token, _INTERNAL_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing internal token")
+
+
+# ── Basic Auth gate for the staging frontend ─────────────────────────────────
+# The standalone RedLens SPA on this host is for owner testing only. Production
+# users go through app.nichelens.ai. Routes that don't need protection:
+#   /api/*         — internal-token gated, called from the prod Next.js backend
+#   /extension.zip — public download (referenced by app.nichelens.ai)
+#   /favicon.ico   — convenience
+# Everything else requires HTTP Basic Auth matching STAGING_USER/STAGING_PASSWORD.
+
+_STAGING_USER = os.getenv("STAGING_USER", "").strip()
+_STAGING_PASSWORD = os.getenv("STAGING_PASSWORD", "").strip()
+_PUBLIC_PATHS = ("/api/", "/extension.zip", "/favicon.ico")
+
+
+@app.middleware("http")
+async def staging_basic_auth(request: Request, call_next):
+    if not _STAGING_USER or not _STAGING_PASSWORD:
+        return await call_next(request)
+    path = request.url.path
+    if path.startswith(_PUBLIC_PATHS):
+        return await call_next(request)
+
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("basic "):
+        try:
+            decoded = base64.b64decode(auth_header[6:].strip()).decode("utf-8")
+            user, _, password = decoded.partition(":")
+            if (
+                secrets.compare_digest(user, _STAGING_USER)
+                and secrets.compare_digest(password, _STAGING_PASSWORD)
+            ):
+                return await call_next(request)
+        except Exception:
+            pass
+
+    return Response(
+        status_code=401,
+        content="Restricted",
+        headers={"WWW-Authenticate": 'Basic realm="RedLens staging"'},
+    )
 
 
 class ValidateCookieRequest(BaseModel):
