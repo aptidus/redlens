@@ -19,10 +19,11 @@ RUN pip install playwright && playwright install chromium --with-deps
 # Copy backend
 COPY api/ ./
 
-# Build extension zip so RedLens can serve it directly (GitHub is blocked in China)
+# Build extension zip so NicheLens can serve it directly (GitHub is blocked in China)
 COPY extension/ ./extension_src/
-RUN cd extension_src && zip -r ../redlens-extension.zip . -x '*.DS_Store' && cd .. \
-    && ls -la redlens-extension.zip
+RUN cd extension_src && zip -r ../nichelens-extension.zip . -x '*.DS_Store' && cd .. \
+    && ln -sf nichelens-extension.zip redlens-extension.zip \
+    && ls -la nichelens-extension.zip
 
 # Copy built frontend
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
@@ -30,4 +31,6 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 ENV PORT=8080
 EXPOSE 8080
 
-CMD ["python", "main.py"]
+# Run alembic only if DATABASE_URL is configured; otherwise start cleanly so
+# extension downloads + frontend keep working during partial setup.
+CMD ["sh", "-c", "if [ -n \"$DATABASE_URL\" ]; then alembic upgrade head || echo 'alembic upgrade failed, continuing'; else echo 'DATABASE_URL not set, skipping migrations'; fi; exec python main.py"]

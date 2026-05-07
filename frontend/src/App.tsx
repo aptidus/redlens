@@ -1,5 +1,8 @@
 import { useState, useRef, useCallback, useEffect, createContext, useContext } from 'react'
+import { SignedIn, SignedOut, SignIn, UserButton, useAuth } from '@clerk/clerk-react'
 import { Lang, loadLang, saveLang, t as translations, LANG_LABELS } from './i18n'
+import { detectExtension } from './extensionApi'
+import { scrapeXhsViaExtension } from './extensionScrapers'
 
 // ─── i18n context ─────────────────────────────────────────────────────────────
 
@@ -40,8 +43,6 @@ function clearSession(p: Platform) {
 
 type AppState = 'setup' | 'loading' | 'report' | 'error'
 type LoadStage = 'crawling' | 'analyzing'
-type QRState = 'idle' | 'connecting' | 'showing' | 'done' | 'error'
-
 interface MetricsSummary {
   total_posts_analyzed: number
   avg_likes: number
@@ -132,89 +133,6 @@ function LensLogo({ size = 40, spinning = false }: { size?: number; spinning?: b
   )
 }
 
-// ─── QR Modal (XHS) ───────────────────────────────────────────────────────────
-
-function QRModal({ onAuthenticated, onClose }: {
-  onAuthenticated: (cookie: string, username: string) => void
-  onClose: () => void
-}) {
-  const { T } = useLang()
-  const [qrState, setQrState] = useState<QRState>('connecting')
-  const [qrImage, setQrImage] = useState('')
-  const [statusMsg, setStatusMsg] = useState(T.qr_connecting)
-  const qrStateRef = useRef<QRState>('connecting')
-
-  const setQrStateSync = (s: QRState) => { qrStateRef.current = s; setQrState(s) }
-
-  useEffect(() => {
-    const es = new EventSource('/api/login/qr')
-    es.addEventListener('status', (e: MessageEvent) => setStatusMsg(JSON.parse(e.data).message))
-    es.addEventListener('qr', (e: MessageEvent) => {
-      setQrImage(JSON.parse(e.data).image)
-      setQrStateSync('showing')
-    })
-    es.addEventListener('authenticated', (e: MessageEvent) => {
-      const data = JSON.parse(e.data)
-      setQrStateSync('done')
-      setStatusMsg('Connected!')
-      es.close()
-      setTimeout(() => onAuthenticated(data.cookie, data.username || ''), 700)
-    })
-    es.addEventListener('error', (e: MessageEvent) => {
-      try { setStatusMsg(JSON.parse(e.data).message || 'Login failed.') } catch { setStatusMsg('Connection error.') }
-      setQrStateSync('error')
-      es.close()
-    })
-    es.onerror = () => {
-      if (qrStateRef.current !== 'done' && qrStateRef.current !== 'error') {
-        setStatusMsg('Connection lost. Try the cookie paste method instead.')
-        setQrStateSync('error')
-      }
-      es.close()
-    }
-    return () => { es.close() }
-  }, [])
-
-  return (
-    <div style={styles.qrOverlay} onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div style={styles.qrModal}>
-        <button style={styles.qrClose} onClick={onClose}>✕</button>
-        <div style={styles.qrHeader}>
-          <LensLogo size={28} />
-          <h3 style={styles.qrTitle}>Connect 小红书</h3>
-        </div>
-        {qrState === 'connecting' && (
-          <div style={styles.qrSpinner}>
-            <LensLogo size={44} spinning />
-            <p style={styles.qrStatusMsg}>{statusMsg}</p>
-          </div>
-        )}
-        {qrState === 'showing' && (
-          <div style={styles.qrBody}>
-            <div style={styles.qrImageWrap}>
-              <img src={qrImage} alt="小红书 QR Code" style={styles.qrImage} />
-            </div>
-            <p style={styles.qrStatusMsg}>{statusMsg}</p>
-            <p style={styles.qrHint}>{T.qr_scan_hint}</p>
-          </div>
-        )}
-        {qrState === 'done' && (
-          <div style={styles.qrSuccess}>
-            <div style={styles.qrSuccessIcon}>✓</div>
-            <p style={styles.qrSuccessText}>{T.qr_connected}</p>
-          </div>
-        )}
-        {qrState === 'error' && (
-          <div style={styles.qrBody}>
-            <p style={styles.qrErrorMsg}>{statusMsg}</p>
-            <button style={styles.qrRetryBtn} onClick={onClose}>{T.qr_close_retry}</button>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 // ─── Douyin Cookie Section ────────────────────────────────────────────────────
 
 function DouyinCookieSection({ session, onSave, onClear, isExpired = false }: {
@@ -278,13 +196,11 @@ function DouyinCookieSection({ session, onSave, onClear, isExpired = false }: {
 
 // ─── XHS Auth Section ────────────────────────────────────────────────────────
 
-function XHSAuthSection({ onQR, onSave, isExpired }: {
-  onQR: () => void
+function XHSAuthSection({ onSave, isExpired }: {
   onSave: (cookie: string) => void
   isExpired?: boolean
 }) {
   const { T } = useLang()
-  const [showPaste, setShowPaste] = useState(false)
   const [input, setInput] = useState('')
   const [validationError, setValidationError] = useState('')
 
@@ -297,44 +213,18 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
     setInput('')
   }
 
-  if (!showPaste) {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {isExpired && (
-          <div style={styles.cookieExpiredBanner}>{T.session_expired_xhs}</div>
-        )}
-        <button style={styles.qrLoginBtn} onClick={onQR}>
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-            <rect x="2" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-            <rect x="11" y="2" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-            <rect x="2" y="11" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.5" />
-            <rect x="4" y="4" width="3" height="3" fill="currentColor" />
-            <rect x="13" y="4" width="3" height="3" fill="currentColor" />
-            <rect x="4" y="13" width="3" height="3" fill="currentColor" />
-            <rect x="11" y="11" width="2" height="2" fill="currentColor" />
-            <rect x="15" y="11" width="2" height="2" fill="currentColor" />
-            <rect x="13" y="13" width="2" height="2" fill="currentColor" />
-            <rect x="11" y="15" width="2" height="2" fill="currentColor" />
-            <rect x="15" y="15" width="2" height="2" fill="currentColor" />
-          </svg>
-          {T.scan_qr_btn}
-        </button>
-        <button style={styles.altAuthLink} onClick={() => setShowPaste(true)}>
-          {T.paste_manual_link}
-        </button>
-      </div>
-    )
-  }
-
   return (
     <div style={styles.cookieSection}>
+      {isExpired && (
+        <div style={styles.cookieExpiredBanner}>{T.session_expired_xhs}</div>
+      )}
       <div style={styles.cookieBody}>
         <div style={styles.bookmarkletBox}>
           <p style={styles.bookmarkletTitle}>{T.cookie_one_click_title}</p>
           <ol style={styles.bookmarkletSteps}>
             <li>
-              <a href="/extension.zip" download="redlens-extension.zip" style={{ color: 'var(--red)', fontWeight: 600 }}>
-                {T.cookie_step_download} redlens-extension.zip ↓
+              <a href="/extension.zip" download="nichelens-extension.zip" style={{ color: 'var(--red)', fontWeight: 600 }}>
+                {T.cookie_step_download} nichelens-extension.zip ↓
               </a>{T.cookie_step_unzip}
             </li>
             <li>{T.cookie_step_load}</li>
@@ -353,8 +243,7 @@ function XHSAuthSection({ onQR, onSave, isExpired }: {
         {validationError && (
           <div style={styles.validationError}>{validationError}</div>
         )}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <button style={styles.altAuthLink} onClick={() => setShowPaste(false)}>{T.back_to_qr}</button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
           <button
             style={{ ...styles.cookieSaveBtn, ...(input.trim() ? {} : styles.analyzeBtnDisabled) }}
             disabled={!input.trim()}
@@ -399,17 +288,10 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
     xhs: loadSession('xhs'),
     douyin: loadSession('douyin'),
   })
-  const [showQR, setShowQR] = useState(false)
 
   const session = sessions[platform]
   const canSubmit = keyword.trim().length > 0 && session.cookie.trim().length > 0
   const activePlatform = PLATFORMS.find(p => p.id === platform)!
-
-  const handleAuthenticated = useCallback((cookie: string, username: string) => {
-    storeSession('xhs', cookie, username)
-    setSessions(s => ({ ...s, xhs: { cookie, username } }))
-    setShowQR(false)
-  }, [])
 
   const handleClearSession = useCallback((p: Platform) => {
     clearSession(p)
@@ -423,16 +305,13 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
 
   return (
     <div style={styles.setupWrap}>
-      {showQR && (
-        <QRModal onAuthenticated={handleAuthenticated} onClose={() => setShowQR(false)} />
-      )}
       <div style={styles.setupGlow} />
 
       {/* Header */}
       <header style={styles.setupHeader}>
         <div style={styles.logoRow}>
           <LensLogo size={36} />
-          <span style={styles.wordmark}>RedLens</span>
+          <span style={styles.wordmark}>NicheLens</span>
         </div>
         <div style={styles.headerRight}>
           <button
@@ -511,7 +390,6 @@ function SetupScreen({ onAnalyze, expiredPlatform }: {
               </div>
             ) : (
               <XHSAuthSection
-                onQR={() => setShowQR(true)}
                 onSave={(cookie) => {
                   storeSession('xhs', cookie, '')
                   setSessions(s => ({ ...s, xhs: { cookie, username: '' } }))
@@ -666,7 +544,7 @@ function ReportScreen({ result, keyword, onReset }: {
       <div style={styles.reportNav}>
         <div style={styles.navLeft}>
           <LensLogo size={24} />
-          <span style={styles.navBrand}>RedLens</span>
+          <span style={styles.navBrand}>NicheLens</span>
         </div>
         <div style={styles.navKeyword}>"{keyword}"</div>
         <button style={styles.navNew} onClick={onReset}>{T.new_analysis}</button>
@@ -905,7 +783,7 @@ function ReportScreen({ result, keyword, onReset }: {
 
         <footer style={styles.reportFooter}>
           <LensLogo size={20} />
-          <span>RedLens · Powered by <strong>mimo-v2.5</strong> · For research and learning only</span>
+          <span>NicheLens · Powered by <strong>mimo-v2.5</strong> · For research and learning only</span>
           {result._meta && (
             <span style={styles.tokenMeta}>
               {T.tokens_used(result._meta.prompt_tokens + result._meta.completion_tokens)}
@@ -949,15 +827,22 @@ export default function App() {
   const [extensionToast, setExtensionToast] = useState<string | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
-  // Detect cookie sent by the RedLens browser extension via URL fragment
+  // Detect cookie sent by the NicheLens browser extension via URL fragment
   useEffect(() => {
     const hash = window.location.hash
-    const match = hash.match(/[#&]xhs_cookie=([^&]+)/)
+    const xhsMatch = hash.match(/[#&]xhs_cookie=([^&]+)/)
+    const douyinMatch = hash.match(/[#&]douyin_cookie=([^&]+)/)
+    const match = xhsMatch || douyinMatch
     if (!match) return
+    const targetPlatform: Platform = xhsMatch ? 'xhs' : 'douyin'
     try {
       const cookie = decodeURIComponent(match[1])
-      if (cookie.includes('web_session=') && cookie.includes('a1=')) {
-        storeSession('xhs', cookie, '')
+      const isComplete = targetPlatform === 'xhs'
+        ? cookie.includes('web_session=') && cookie.includes('a1=')
+        : cookie.includes('sessionid_ss=') && cookie.includes('ttwid=') && cookie.includes('msToken=')
+      if (isComplete) {
+        storeSession(targetPlatform, cookie, '')
+        setPlatform(targetPlatform)
         setExtensionToast(T.ext_connected)
         setTimeout(() => setExtensionToast(null), 4000)
       } else {
@@ -971,7 +856,9 @@ export default function App() {
     }
   }, [T])
 
-  const handleAnalyze = useCallback((kw: string, cookie: string, maxNotes: number, plt: Platform, dateRange: string) => {
+  const { getToken } = useAuth()
+
+  const handleAnalyze = useCallback(async (kw: string, cookie: string, maxNotes: number, plt: Platform, dateRange: string) => {
     const platformLabel = PLATFORMS.find(p => p.id === plt)?.label ?? plt
     setKeyword(kw)
     setPlatform(plt)
@@ -980,6 +867,49 @@ export default function App() {
     setLoadMessage(`Searching ${platformLabel} for "${kw}"…`)
     setError(null)
 
+    const token = await getToken().catch(() => null)
+    if (!token) {
+      setError('Auth error — please sign in again.')
+      setAppState('error')
+      return
+    }
+
+    // Prefer extension-side scraping when available — it bypasses XHS's
+    // server-IP block (-104) by running the API call from the user's own
+    // logged-in tab. Today: XHS only. Falls back to server-side for douyin
+    // and when the extension isn't installed.
+    if (plt === 'xhs') {
+      const extVersion = await detectExtension(800)
+      if (extVersion) {
+        try {
+          setLoadMessage(`Scraping ${platformLabel} via your browser…`)
+          const notes = await scrapeXhsViaExtension(kw, maxNotes)
+          if (notes.length === 0) throw new Error('No notes returned by extension fetch.')
+          setLoadStage('analyzing')
+          setLoadMessage(`Analyzing ${notes.length} posts with AI…`)
+          const res = await fetch('/api/analyze-from-results', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keyword: kw, notes, platform: plt, language: lang }),
+          })
+          if (!res.ok) {
+            const txt = await res.text().catch(() => '')
+            throw new Error(`Analyze failed: ${res.status} ${txt.slice(0, 200)}`)
+          }
+          const analysis = await res.json()
+          if (typeof analysis?._credits_remaining === 'number') {
+            window.dispatchEvent(new CustomEvent('nichelens:balance', { detail: analysis._credits_remaining }))
+          }
+          setResult(analysis as AnalysisResult)
+          setAppState('report')
+          return
+        } catch (e) {
+          console.warn('[NicheLens] extension scrape failed, falling back to server', e)
+          // fall through to server-side path
+        }
+      }
+    }
+
     const params = new URLSearchParams({
       keyword: kw,
       cookie,
@@ -987,9 +917,19 @@ export default function App() {
       platform: plt,
       date_range: dateRange,
       language: lang,
+      token,
     })
     const es = new EventSource(`/api/analyze?${params}`)
     esRef.current = es
+
+    es.addEventListener('balance', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data)
+        if (typeof data.credits === 'number') {
+          window.dispatchEvent(new CustomEvent('nichelens:balance', { detail: data.credits }))
+        }
+      } catch {}
+    })
 
     es.addEventListener('status', (e: MessageEvent) => {
       const data = JSON.parse(e.data)
@@ -1032,6 +972,13 @@ export default function App() {
 
   return (
     <LangContext.Provider value={{ lang, T, setLang }}>
+      <SignedOut>
+        <SignInScreen lang={lang} setLang={setLang} />
+      </SignedOut>
+      <SignedIn>
+      <AccountStrip />
+      {window.location.pathname === '/admin' && <AdminPage />}
+      {window.location.pathname !== '/admin' && (<>
       {appState === 'loading' && (
         <LoadingScreen
           stage={loadStage}
@@ -1063,7 +1010,233 @@ export default function App() {
           <span>{extensionToast}</span>
         </div>
       )}
+      </>)}
+      </SignedIn>
     </LangContext.Provider>
+  )
+}
+
+// ─── Sign-in landing ──────────────────────────────────────────────────────────
+
+function SignInScreen({ lang, setLang }: { lang: Lang; setLang: (l: Lang) => void }) {
+  return (
+    <div style={styles.setupWrap}>
+      <div style={styles.setupGlow} />
+      <header style={styles.setupHeader}>
+        <div style={styles.logoRow}>
+          <LensLogo size={36} />
+          <span style={styles.wordmark}>NicheLens</span>
+        </div>
+        <button
+          style={styles.langToggle}
+          onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')}
+          title="Switch language"
+        >
+          {lang === 'zh' ? LANG_LABELS.en : LANG_LABELS.zh}
+        </button>
+      </header>
+      <div style={{ width: '100%', maxWidth: '420px', marginTop: '64px', display: 'flex', justifyContent: 'center' }}>
+        <SignIn
+          routing="hash"
+          appearance={{
+            elements: {
+              rootBox: { width: '100%' },
+              card: { background: 'var(--bg-1)', border: '1px solid var(--border)' },
+            },
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ─── Account strip (credit balance + UserButton) ──────────────────────────────
+
+function AccountStrip() {
+  const { getToken } = useAuth()
+  const [credits, setCredits] = useState<number | null>(null)
+  const [isAdmin, setIsAdmin] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      const token = await getToken().catch(() => null)
+      if (!token) return
+      try {
+        const res = await fetch('/api/me', { headers: { Authorization: `Bearer ${token}` } })
+        if (!res.ok) return
+        const data = await res.json()
+        if (cancelled) return
+        if (typeof data.credits === 'number') setCredits(data.credits)
+        setIsAdmin(Boolean(data.is_admin))
+      } catch {}
+    }
+    refresh()
+    const onBalance = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (typeof detail === 'number') setCredits(detail)
+    }
+    window.addEventListener('nichelens:balance', onBalance)
+    return () => {
+      cancelled = true
+      window.removeEventListener('nichelens:balance', onBalance)
+    }
+  }, [getToken])
+
+  return (
+    <div style={styles.accountStrip}>
+      {isAdmin && (
+        <a href="/admin" style={styles.adminLink}>Admin</a>
+      )}
+      <div style={styles.creditPill}>
+        <span style={styles.creditDot} />
+        <span>{credits === null ? '…' : credits} credits</span>
+      </div>
+      <UserButton afterSignOutUrl="/" />
+    </div>
+  )
+}
+
+// ─── Admin page ───────────────────────────────────────────────────────────────
+
+interface AdminUserRow {
+  clerk_user_id: string
+  email: string | null
+  credits: number
+  created_at: string
+  spent_total: number
+}
+
+function AdminPage() {
+  const { getToken } = useAuth()
+  const [rows, setRows] = useState<AdminUserRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [edits, setEdits] = useState<Record<string, string>>({})
+  const [savingId, setSavingId] = useState<string | null>(null)
+
+  const fetchUsers = useCallback(async (q: string) => {
+    setLoading(true)
+    setError(null)
+    const token = await getToken().catch(() => null)
+    if (!token) { setError('Not authenticated.'); setLoading(false); return }
+    try {
+      const url = `/api/admin/users?limit=100${q ? `&q=${encodeURIComponent(q)}` : ''}`
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+      if (res.status === 403) { setError('Admin access required.'); setLoading(false); return }
+      if (!res.ok) { setError(`Error ${res.status}`); setLoading(false); return }
+      const data = await res.json()
+      setRows(data.users || [])
+      setTotal(data.total ?? 0)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [getToken])
+
+  useEffect(() => { fetchUsers('') }, [fetchUsers])
+
+  const onSave = async (clerkId: string) => {
+    const raw = edits[clerkId]
+    const n = Number.parseInt(raw, 10)
+    if (!Number.isFinite(n) || n < 0) { alert('Credits must be a non-negative integer.'); return }
+    setSavingId(clerkId)
+    const token = await getToken().catch(() => null)
+    if (!token) { setSavingId(null); return }
+    try {
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(clerkId)}/credits`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credits: n }),
+      })
+      if (!res.ok) {
+        const txt = await res.text()
+        alert(`Failed: ${res.status} ${txt.slice(0, 200)}`)
+        return
+      }
+      const data = await res.json()
+      setRows(rs => rs.map(r => r.clerk_user_id === clerkId ? { ...r, credits: data.credits } : r))
+      setEdits(e => { const next = { ...e }; delete next[clerkId]; return next })
+    } finally {
+      setSavingId(null)
+    }
+  }
+
+  return (
+    <div style={styles.adminWrap}>
+      <header style={styles.adminHeader}>
+        <div style={styles.logoRow}>
+          <LensLogo size={28} />
+          <span style={styles.wordmark}>NicheLens</span>
+          <span style={styles.adminTag}>ADMIN</span>
+        </div>
+        <a href="/" style={styles.adminLink}>← Back to app</a>
+      </header>
+      <div style={styles.adminSearchRow}>
+        <input
+          style={styles.adminSearch}
+          type="text"
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') fetchUsers(query) }}
+          placeholder="Search by email or clerk id…"
+        />
+        <button style={styles.adminSearchBtn} onClick={() => fetchUsers(query)}>Search</button>
+      </div>
+      {loading && <p style={styles.adminMeta}>Loading…</p>}
+      {error && <p style={{ ...styles.adminMeta, color: 'var(--red)' }}>{error}</p>}
+      {!loading && !error && (
+        <>
+          <p style={styles.adminMeta}>{rows.length} of {total} users</p>
+          <table style={styles.adminTable}>
+            <thead>
+              <tr>
+                <th style={styles.adminTh}>Email</th>
+                <th style={styles.adminTh}>Clerk ID</th>
+                <th style={styles.adminTh}>Created</th>
+                <th style={styles.adminThNum}>Spent</th>
+                <th style={styles.adminThNum}>Credits</th>
+                <th style={styles.adminTh}>Set to</th>
+                <th style={styles.adminTh}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.clerk_user_id}>
+                  <td style={styles.adminTd}>{r.email || <em style={{ color: 'var(--text-3)' }}>—</em>}</td>
+                  <td style={{ ...styles.adminTd, fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-3)' }}>{r.clerk_user_id}</td>
+                  <td style={styles.adminTd}>{new Date(r.created_at).toLocaleDateString()}</td>
+                  <td style={styles.adminTdNum}>{r.spent_total}</td>
+                  <td style={styles.adminTdNum}>{r.credits}</td>
+                  <td style={styles.adminTd}>
+                    <input
+                      style={styles.adminCreditInput}
+                      type="number"
+                      min={0}
+                      value={edits[r.clerk_user_id] ?? ''}
+                      placeholder={String(r.credits)}
+                      onChange={e => setEdits(s => ({ ...s, [r.clerk_user_id]: e.target.value }))}
+                    />
+                  </td>
+                  <td style={styles.adminTd}>
+                    <button
+                      style={styles.adminSaveBtn}
+                      disabled={savingId === r.clerk_user_id || !(edits[r.clerk_user_id] ?? '').trim()}
+                      onClick={() => onSave(r.clerk_user_id)}
+                    >
+                      {savingId === r.clerk_user_id ? 'Saving…' : 'Save'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -1102,10 +1275,7 @@ const styles: Record<string, React.CSSProperties> = {
   sessionName: { fontSize: '14px', color: 'var(--text)', fontWeight: 500 },
   switchBtn: { fontFamily: 'var(--font-mono)', fontSize: '11px', letterSpacing: '0.06em', color: 'var(--text-3)', background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 },
 
-  qrLoginBtn: { display: 'flex', alignItems: 'center', gap: '10px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '14px 16px', fontSize: '15px', fontWeight: 500, cursor: 'pointer', transition: 'border-color 0.2s, background 0.2s', fontFamily: 'var(--font-ui)', width: '100%', justifyContent: 'center' },
-  altAuthLink: { background: 'none', border: 'none', color: 'var(--text-3)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', fontFamily: 'var(--font-mono)', padding: '6px 0', textAlign: 'center' as const, letterSpacing: '0.02em' },
-
-  // Douyin cookie section
+  // Cookie section (XHS + Douyin)
   cookieSection: { display: 'flex', flexDirection: 'column', gap: '0', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', overflow: 'hidden' },
   cookieExpiredBanner: { padding: '10px 16px', background: 'rgba(229,26,40,0.08)', borderBottom: '1px solid rgba(229,26,40,0.2)', fontSize: '13px', color: 'rgba(229,26,40,0.9)', fontFamily: 'var(--font-mono)', letterSpacing: '0.02em' },
   cookieToggle: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 16px', background: 'var(--bg-2)', border: 'none', cursor: 'pointer', color: 'var(--text)', fontSize: '15px', fontFamily: 'var(--font-ui)', fontWeight: 500 },
@@ -1120,23 +1290,26 @@ const styles: Record<string, React.CSSProperties> = {
   validationError: { padding: '10px 12px', background: 'rgba(229,26,40,0.1)', border: '1px solid rgba(229,26,40,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '13px', color: 'rgba(229,26,40,0.95)', lineHeight: 1.5 },
   extensionToast: { position: 'fixed' as const, bottom: '24px', right: '24px', display: 'flex', alignItems: 'center', gap: '10px', padding: '14px 18px', background: 'rgba(8,8,9,0.95)', border: '1px solid rgba(62,207,142,0.3)', borderRadius: '10px', fontSize: '14px', color: 'var(--text)', boxShadow: '0 8px 32px rgba(0,0,0,0.5)', backdropFilter: 'blur(10px)', zIndex: 1000, fontFamily: 'var(--font-ui)', animation: 'fade-up 0.3s ease' },
 
-  // QR Modal
-  qrOverlay: { position: 'fixed' as const, inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999, padding: '24px', animation: 'fade-up 0.2s ease' },
-  qrModal: { position: 'relative' as const, background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: '20px', padding: '32px', width: '100%', maxWidth: '360px', display: 'flex', flexDirection: 'column', gap: '24px', boxShadow: '0 24px 80px rgba(0,0,0,0.5)' },
-  qrClose: { position: 'absolute' as const, top: '16px', right: '16px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text-3)', cursor: 'pointer', padding: '4px 8px', fontSize: '13px', lineHeight: 1, fontFamily: 'var(--font-mono)' },
-  qrHeader: { display: 'flex', alignItems: 'center', gap: '12px' },
-  qrTitle: { fontFamily: 'var(--font-display)', fontSize: '20px', fontWeight: 700, letterSpacing: '-0.02em', color: 'var(--text)' },
-  qrSpinner: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', padding: '24px 0' },
-  qrBody: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' },
-  qrImageWrap: { background: '#fff', borderRadius: '12px', padding: '12px', display: 'inline-flex', boxShadow: '0 4px 20px rgba(0,0,0,0.15)' },
-  qrImage: { width: '200px', height: '200px', display: 'block' },
-  qrStatusMsg: { fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-2)', textAlign: 'center' as const, letterSpacing: '0.04em' },
-  qrHint: { fontSize: '13px', color: 'var(--text-3)', textAlign: 'center' as const, lineHeight: 1.5 },
-  qrSuccess: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px', padding: '24px 0' },
-  qrSuccessIcon: { width: '52px', height: '52px', borderRadius: '50%', background: 'rgba(62,207,142,0.12)', border: '2px solid var(--green)', color: 'var(--green)', fontSize: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700 },
-  qrSuccessText: { fontSize: '15px', color: 'var(--text)', fontWeight: 500 },
-  qrErrorMsg: { fontSize: '14px', color: 'rgba(229,26,40,0.9)', textAlign: 'center' as const, lineHeight: 1.5 },
-  qrRetryBtn: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', color: 'var(--text)', padding: '10px 20px', fontSize: '14px', cursor: 'pointer', fontFamily: 'var(--font-ui)' },
+  accountStrip: { position: 'fixed' as const, top: '20px', right: '20px', display: 'flex', alignItems: 'center', gap: '12px', zIndex: 100 },
+  creditPill: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 14px', background: 'rgba(8,8,9,0.85)', border: '1px solid var(--border)', borderRadius: '999px', fontSize: '12px', fontFamily: 'var(--font-mono)', color: 'var(--text)', backdropFilter: 'blur(10px)' },
+  creditDot: { width: '6px', height: '6px', borderRadius: '50%', background: 'var(--green)' },
+  adminLink: { color: 'var(--text-2)', textDecoration: 'none', fontSize: '12px', fontFamily: 'var(--font-mono)', padding: '6px 12px', border: '1px solid var(--border)', borderRadius: '999px', background: 'rgba(8,8,9,0.85)', backdropFilter: 'blur(10px)' },
+
+  // Admin page
+  adminWrap: { minHeight: '100vh', padding: '24px 32px 60px', maxWidth: '1200px', margin: '0 auto' },
+  adminHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingBottom: '20px', borderBottom: '1px solid var(--border)', marginBottom: '24px' },
+  adminTag: { fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.12em', color: 'var(--red)', border: '1px solid rgba(229,26,40,0.3)', padding: '2px 8px', borderRadius: '4px', marginLeft: '8px' },
+  adminSearchRow: { display: 'flex', gap: '8px', marginBottom: '12px' },
+  adminSearch: { flex: 1, background: 'var(--bg-1)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px 14px', color: 'var(--text)', fontSize: '14px', outline: 'none', fontFamily: 'var(--font-ui)' },
+  adminSearchBtn: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: '8px', padding: '10px 18px', color: 'var(--text)', fontSize: '13px', cursor: 'pointer', fontFamily: 'var(--font-ui)' },
+  adminMeta: { fontSize: '12px', color: 'var(--text-3)', fontFamily: 'var(--font-mono)', margin: '8px 0 16px' },
+  adminTable: { width: '100%', borderCollapse: 'collapse' as const, fontSize: '13px' },
+  adminTh: { textAlign: 'left' as const, padding: '10px 12px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: 'var(--text-2)', fontSize: '11px', fontFamily: 'var(--font-mono)', letterSpacing: '0.06em', textTransform: 'uppercase' as const },
+  adminThNum: { textAlign: 'right' as const, padding: '10px 12px', borderBottom: '1px solid var(--border)', fontWeight: 600, color: 'var(--text-2)', fontSize: '11px', fontFamily: 'var(--font-mono)', letterSpacing: '0.06em', textTransform: 'uppercase' as const },
+  adminTd: { padding: '10px 12px', borderBottom: '1px solid var(--bg-2)', color: 'var(--text)', verticalAlign: 'middle' as const },
+  adminTdNum: { padding: '10px 12px', borderBottom: '1px solid var(--bg-2)', color: 'var(--text)', textAlign: 'right' as const, fontFamily: 'var(--font-mono)' },
+  adminCreditInput: { width: '90px', background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: '6px', padding: '6px 10px', color: 'var(--text)', fontSize: '13px', fontFamily: 'var(--font-mono)', outline: 'none' },
+  adminSaveBtn: { background: 'var(--red)', border: 'none', borderRadius: '6px', padding: '6px 14px', color: '#fff', fontSize: '12px', fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui)' },
 
   select: { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '14px 16px', color: 'var(--text)', fontSize: '14px', outline: 'none', width: '100%', cursor: 'pointer', fontFamily: 'var(--font-ui)', appearance: 'auto' as const },
   slider: { width: '100%', accentColor: 'var(--red)', cursor: 'pointer', height: '4px' },

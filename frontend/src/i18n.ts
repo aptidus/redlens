@@ -46,9 +46,6 @@ type Dict = {
   research_only: string
 
   // Auth section
-  scan_qr_btn: string
-  paste_manual_link: string
-  back_to_qr: string
   save_cookie: string
   switch_account: string
   connected: string
@@ -73,14 +70,6 @@ type Dict = {
   douyin_step_2: string
   douyin_step_3: string
   douyin_step_4: string
-
-  // QR Modal
-  qr_connecting: string
-  qr_opening: string
-  qr_waiting_qr: string
-  qr_scan_hint: string
-  qr_connected: string
-  qr_close_retry: string
 
   // Loading screen
   load_searching: (platform: string, keyword: string) => string
@@ -165,21 +154,18 @@ export const t: Record<Lang, Dict> = {
     footer_text: '由',
     research_only: '仅供研究学习使用',
 
-    scan_qr_btn: '扫码连接小红书',
-    paste_manual_link: '或手动粘贴 Cookie',
-    back_to_qr: '← 返回扫码',
     save_cookie: '保存 Cookie',
     switch_account: '切换账号',
     connected: '已连接',
-    session_expired_xhs: '⚠️ 登录已过期 —— 请重新扫码或粘贴新的 Cookie',
+    session_expired_xhs: '⚠️ 登录已过期 —— 请粘贴新的 Cookie',
     session_expired_douyin: '⚠️ Cookie 已过期 —— 请粘贴新的 Cookie 继续',
 
-    cookie_one_click_title: '一键连接：使用 RedLens 浏览器插件',
+    cookie_one_click_title: '一键连接：使用 NicheLens 浏览器插件',
     cookie_step_download: '下载',
     cookie_step_unzip: '并解压',
     cookie_step_load: 'Chrome → chrome://extensions → 打开「开发者模式」→「加载已解压的扩展程序」→ 选择解压后的文件夹',
-    cookie_step_visit: '访问 xiaohongshu.com（已登录），右下角会出现红色「Connect to RedLens」按钮',
-    cookie_step_click: '点击它。RedLens 会自动打开并完成连接。',
+    cookie_step_visit: '访问 xiaohongshu.com 或 douyin.com（已登录），右下角会出现「Connect」按钮',
+    cookie_step_click: '点击它。NicheLens 会自动打开并完成连接。',
     cookie_note: '一次安装，终身使用。每次访问小红书时按钮就在那，无需复制粘贴。',
     cookie_manual_fallback: '手动备选：F12 →「Network」→ 点击「Fetch/XHR」过滤器 → 刷新 → 点击任意 xiaohongshu.com API 请求 → 复制「cookie:」请求头的值 → 粘贴到下方。',
     cookie_validation_no_session: '缺少 web_session Cookie。XHS 把它设为 httpOnly，所以书签栏脚本读不到 —— 必须用下面的 Network 标签方法。',
@@ -190,13 +176,6 @@ export const t: Record<Lang, Dict> = {
     douyin_step_2: '按 F12 → 切换到 Network 标签 → 刷新页面',
     douyin_step_3: '点击任意请求 → Headers → 找到 Cookie:',
     douyin_step_4: '复制完整内容并粘贴到下方',
-
-    qr_connecting: '正在连接小红书…',
-    qr_opening: '正在打开小红书…',
-    qr_waiting_qr: '等待二维码…',
-    qr_scan_hint: '打开小红书 App → 个人主页 → 扫一扫',
-    qr_connected: '连接成功！',
-    qr_close_retry: '关闭并重试',
 
     load_searching: (p, kw) => `正在 ${p} 搜索 "${kw}"…`,
     load_stage_crawling: (p) => `抓取 ${p}`,
@@ -276,21 +255,18 @@ export const t: Record<Lang, Dict> = {
     footer_text: 'Powered by',
     research_only: 'For research and learning purposes only',
 
-    scan_qr_btn: 'Scan QR to connect 小红书',
-    paste_manual_link: 'Paste cookie manually instead',
-    back_to_qr: '← Back to QR',
     save_cookie: 'Save Cookie',
     switch_account: 'Switch account',
     connected: 'Connected',
-    session_expired_xhs: '⚠️ Session expired — reconnect via QR or paste a fresh cookie',
+    session_expired_xhs: '⚠️ Session expired — paste a fresh cookie to continue',
     session_expired_douyin: '⚠️ Cookie expired — paste a fresh one to continue',
 
-    cookie_one_click_title: 'One-click connect with the RedLens extension',
+    cookie_one_click_title: 'One-click connect with the NicheLens extension',
     cookie_step_download: 'Download',
     cookie_step_unzip: ' and unzip',
     cookie_step_load: 'Chrome → chrome://extensions → toggle Developer mode → Load unpacked → pick the unzipped folder',
-    cookie_step_visit: 'Visit xiaohongshu.com (logged in). A red "Connect to RedLens" button appears bottom-right.',
-    cookie_step_click: 'Click it. RedLens opens, already connected.',
+    cookie_step_visit: 'Visit xiaohongshu.com or douyin.com (logged in). A "Connect" button appears bottom-right.',
+    cookie_step_click: 'Click it. NicheLens opens, already connected.',
     cookie_note: 'One-time install. After that: every time you\'re on XHS, the button is right there — no extension icon, no copy/paste.',
     cookie_manual_fallback: 'Manual fallback: F12 → Network → click Fetch/XHR filter → reload → click any xiaohongshu.com API request → copy the cookie: header value → paste below.',
     cookie_validation_no_session: 'Missing web_session cookie. XHS marks it as httpOnly so a bookmarklet can\'t read it — you must use the Network tab method below.',
@@ -301,13 +277,6 @@ export const t: Record<Lang, Dict> = {
     douyin_step_2: 'Press F12 → Network tab → reload the page',
     douyin_step_3: 'Click any request → Headers → find Cookie:',
     douyin_step_4: 'Copy the full value and paste below',
-
-    qr_connecting: 'Connecting to 小红书…',
-    qr_opening: 'Opening 小红书…',
-    qr_waiting_qr: 'Waiting for QR code…',
-    qr_scan_hint: 'Open 小红书 app → tap profile → Scan QR',
-    qr_connected: 'Connected successfully!',
-    qr_close_retry: 'Close & try again',
 
     load_searching: (p, kw) => `Searching ${p} for "${kw}"…`,
     load_stage_crawling: (p) => `Crawling ${p}`,

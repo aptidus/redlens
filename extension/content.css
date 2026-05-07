@@ -1,4 +1,4 @@
-/* Floating button injected on every xiaohongshu.com page */
+/* Floating button injected on supported social pages (XHS, Douyin) */
 #redlens-fab {
   position: fixed !important;
   right: 20px !important;
@@ -34,6 +34,14 @@
 .redlens-fab-btn:hover {
   transform: translateY(-1px) !important;
   box-shadow: 0 6px 20px rgba(229, 26, 40, 0.45), 0 2px 4px rgba(0, 0, 0, 0.25) !important;
+}
+
+#redlens-fab.redlens-fab-douyin .redlens-fab-btn {
+  background: linear-gradient(135deg, #25f4ee 0%, #161823 50%, #fe2c55 100%) !important;
+}
+
+#redlens-fab.redlens-fab-douyin .redlens-fab-btn:hover {
+  box-shadow: 0 6px 20px rgba(254, 44, 85, 0.45), 0 2px 4px rgba(0, 0, 0, 0.25) !important;
 }
 
 .redlens-fab-btn:active {

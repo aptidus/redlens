@@ -1,4 +1,4 @@
-const DEFAULT_REDLENS_URL = "https://redlens-production.up.railway.app";
+const DEFAULT_REDLENS_URL = "https://nichelens.ai";
 
 const statusEl = document.getElementById("status");
 const sendBtn = document.getElementById("send");
@@ -11,33 +11,68 @@ function setStatus(msg, kind) {
   statusEl.className = "status" + (kind ? " " + kind : "");
 }
 
+function detectPlatform(url) {
+  try {
+    const host = new URL(url).hostname;
+    if (host.endsWith("xiaohongshu.com")) return "xhs";
+    if (host.endsWith("douyin.com")) return "douyin";
+  } catch {}
+  return null;
+}
+
 let cached = null;
 let redlensUrl = DEFAULT_REDLENS_URL;
+let cachedFragmentKey = null;
 
 (async () => {
   const urlResp = await chrome.runtime.sendMessage({ type: "getRedlensUrl" });
   redlensUrl = (urlResp && urlResp.url) || DEFAULT_REDLENS_URL;
   targetEl.textContent = redlensUrl;
 
-  const cookieResp = await chrome.runtime.sendMessage({ type: "getXhsCookies" });
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const platform = tab && tab.url ? detectPlatform(tab.url) : null;
+  if (!platform) {
+    setStatus("Open a xiaohongshu.com or douyin.com tab, then reopen this popup.", "err");
+    return;
+  }
+
+  // Read document.cookie from the page (anti-bot tokens that aren't in chrome.cookies).
+  let pageCookieStr = "";
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.cookie || "",
+    });
+    pageCookieStr = result || "";
+  } catch (e) {
+    // scripting permission may be missing in popup context; service worker still gets HttpOnly cookies.
+  }
+
+  const cookieResp = await chrome.runtime.sendMessage({
+    type: "getPlatformCookies",
+    platform,
+    pageCookieStr,
+  });
   if (!cookieResp || !cookieResp.ok) {
     if (cookieResp && cookieResp.missing && cookieResp.missing.length) {
-      setStatus(`Missing cookie(s): ${cookieResp.missing.join(", ")}. Make sure you're logged in to xiaohongshu.com.`, "err");
+      setStatus(`Missing cookie(s): ${cookieResp.missing.join(", ")}. Make sure you're logged in.`, "err");
     } else {
-      setStatus("No xiaohongshu.com cookies. Log in there first, then reopen.", "err");
+      setStatus((cookieResp && cookieResp.error) || "Could not read cookies.", "err");
     }
     return;
   }
   cached = cookieResp.cookieStr;
-  setStatus(`Found ${cookieResp.count} cookies including web_session. Tip: a button is also injected on the XHS page itself.`, "ok");
+  cachedFragmentKey = cookieResp.fragmentKey;
+  const platformLabel = platform === "xhs" ? "小红书" : "抖音";
+  setStatus(`Found ${cookieResp.count} ${platformLabel} cookies. Tip: a button is also injected on the page.`, "ok");
   sendBtn.disabled = false;
 })();
 
 sendBtn.addEventListener("click", async () => {
-  if (!cached) return;
-  const target = `${redlensUrl}/#xhs_cookie=${encodeURIComponent(cached)}`;
+  if (!cached || !cachedFragmentKey) return;
+  const target = `${redlensUrl}/#${cachedFragmentKey}=${encodeURIComponent(cached)}`;
   await chrome.tabs.create({ url: target });
-  setStatus("Opened RedLens.", "ok");
+  setStatus("Opened NicheLens.", "ok");
   setTimeout(() => window.close(), 600);
 });
 

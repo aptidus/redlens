@@ -1,4 +1,4 @@
-const DEFAULT_REDLENS_URL = "https://redlens-production.up.railway.app";
+const DEFAULT_REDLENS_URL = "https://nichelens.ai";
 
 const urlInput = document.getElementById("url");
 const saveBtn = document.getElementById("save");
