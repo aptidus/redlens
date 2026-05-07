@@ -1,11 +1,12 @@
 import json
 import logging
 import os
+import secrets
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -27,14 +28,39 @@ from login_manager import xhs_qr_login
 
 app = FastAPI(title="RedLens", version="3.0.0")
 
+# Allowed callers — comma-separated origins. Empty/unset = legacy permissive
+# behavior so existing /staging access keeps working during migration.
+_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv("REDLENS_ALLOWED_ORIGINS", "").split(",")
+    if o.strip()
+] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["x-redlens-status"],
 )
 
 SUPPORTED_PLATFORMS = {"xhs", "douyin"}
+
+# ── Internal token gate ─────────────────────────────────────────────────────
+# When REDLENS_INTERNAL_TOKEN is set, sensitive endpoints require the matching
+# `x-internal-token` header from callers (the Next.js SSE proxy). When unset
+# (early staging), endpoints stay open so curl-driven QA still works.
+
+_INTERNAL_TOKEN = os.getenv("REDLENS_INTERNAL_TOKEN", "").strip()
+
+
+def require_internal_token(x_internal_token: str = Header(default="")) -> None:
+    """FastAPI dependency: 401 unless `x-internal-token` matches env."""
+    if not _INTERNAL_TOKEN:
+        # Token not configured — allow (legacy behavior). Logged once at startup.
+        return
+    if not secrets.compare_digest(x_internal_token, _INTERNAL_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid or missing internal token")
 
 
 class ValidateCookieRequest(BaseModel):
@@ -46,6 +72,16 @@ class ValidateCookieRequest(BaseModel):
 async def _startup():
     if not os.getenv("MIMO_API_KEY"):
         logger.warning("MIMO_API_KEY not set — AI analysis will fail")
+    if not _INTERNAL_TOKEN:
+        logger.warning(
+            "REDLENS_INTERNAL_TOKEN not set — sensitive endpoints are OPEN. "
+            "Set this in production so only the Next.js proxy can call /api/analyze etc."
+        )
+    if _ALLOWED_ORIGINS == ["*"]:
+        logger.warning(
+            "REDLENS_ALLOWED_ORIGINS not set — CORS allows all origins. "
+            "Set to e.g. https://app.nichelens.ai in production."
+        )
     logger.info("RedLens v3 started. Model: %s", os.getenv("MIMO_MODEL", "mimo-v2.5"))
 
 
@@ -59,7 +95,7 @@ async def health():
     }
 
 
-@app.get("/api/login/qr")
+@app.get("/api/login/qr", dependencies=[Depends(require_internal_token)])
 async def login_qr():
     """SSE stream: XHS QR login. Events: status, qr, authenticated, error."""
     async def gen():
@@ -68,7 +104,7 @@ async def login_qr():
     return EventSourceResponse(gen())
 
 
-@app.post("/api/validate-cookie")
+@app.post("/api/validate-cookie", dependencies=[Depends(require_internal_token)])
 async def validate_cookie(req: ValidateCookieRequest):
     """Quick check that the platform cookie is valid."""
     platform = req.platform.lower()
@@ -105,7 +141,7 @@ async def validate_cookie(req: ValidateCookieRequest):
         raise HTTPException(400, f"Unknown platform: {platform}. Supported: {list(SUPPORTED_PLATFORMS)}")
 
 
-@app.get("/api/analyze")
+@app.get("/api/analyze", dependencies=[Depends(require_internal_token)])
 async def analyze_stream(keyword: str, cookie: str, max_notes: int = 15, platform: str = "xhs", date_range: str = "all", language: str = "zh"):
     """SSE stream: crawl platform → AI analysis → done."""
     if not keyword.strip():
