@@ -27,6 +27,82 @@ _comment_semaphore = asyncio.Semaphore(3)
 
 
 # ---------------------------------------------------------------------------
+# Human-pacing profiles
+# ---------------------------------------------------------------------------
+#
+# All XHS interactions go through these jittered delays to look like a user
+# scrolling, reading, tapping. The active profile is picked from
+# XHS_PACE_PROFILE env (fast | normal | slow). Default: "normal".
+#
+# Each tuple is (min_seconds, max_seconds) — uniform random in that range.
+#
+#   read_post       : after opening a note, before tapping comments. Models
+#                     the time a human spends reading the post body.
+#                     Reference: a 200-character XHS post takes ~3-6s to read.
+#   comments_load   : after comments open, before scanning them. Mimics the
+#                     pause while the eye registers the first few comments.
+#   reply_expand    : before tapping "view replies" on a comment. People
+#                     don't expand every reply thread instantly.
+#   between_notes   : after one note is fully consumed, before opening the
+#                     next from the search feed. Includes scroll + decide.
+#
+# Trade-off: a 15-note run takes roughly:
+#   fast    →  ~45-90 s  (looks fast but bot-detectable)
+#   normal  → ~3-4 min   (default; mimics a user actually reading)
+#   slow    → ~6-10 min  (very safe; use if XHS keeps flagging)
+#
+# Override individual ranges with XHS_READ_POST_MIN/MAX etc. if you want
+# a custom profile without editing code.
+
+_PACE_PROFILES: Dict[str, Dict[str, tuple]] = {
+    "fast": {
+        "read_post":     (1.0, 2.0),
+        "comments_load": (0.5, 1.5),
+        "reply_expand":  (0.5, 1.0),
+        "between_notes": (1.5, 3.5),
+    },
+    "normal": {
+        "read_post":     (2.5, 5.0),
+        "comments_load": (1.5, 3.0),
+        "reply_expand":  (1.0, 2.5),
+        "between_notes": (4.0, 9.0),
+    },
+    "slow": {
+        "read_post":     (5.0, 10.0),
+        "comments_load": (3.0, 6.0),
+        "reply_expand":  (2.0, 5.0),
+        "between_notes": (8.0, 16.0),
+    },
+}
+
+
+def _pace(name: str) -> tuple:
+    """Resolve a pacing range from env override, falling back to the active profile."""
+    profile_name = os.getenv("XHS_PACE_PROFILE", "normal").lower()
+    profile = _PACE_PROFILES.get(profile_name, _PACE_PROFILES["normal"])
+    base_min, base_max = profile[name]
+
+    # Per-knob env override: XHS_READ_POST_MIN=4 XHS_READ_POST_MAX=8
+    env_prefix = "XHS_" + name.upper()
+    try:
+        env_min = float(os.getenv(env_prefix + "_MIN", base_min))
+        env_max = float(os.getenv(env_prefix + "_MAX", base_max))
+        if env_max < env_min:
+            env_max = env_min
+        return (env_min, env_max)
+    except ValueError:
+        return (base_min, base_max)
+
+
+async def _human_sleep(name: str) -> None:
+    """Jittered sleep matching the configured pace for this interaction stage."""
+    lo, hi = _pace(name)
+    if hi <= 0:
+        return
+    await asyncio.sleep(random.uniform(lo, hi))
+
+
+# ---------------------------------------------------------------------------
 # Custom error hierarchy
 # ---------------------------------------------------------------------------
 
@@ -47,6 +123,11 @@ class XHSPermissionError(XHSAPIError):
 
 class XHSRateLimitError(XHSAPIError):
     """Rate limited by XHS (code 300012)."""
+
+
+class XHSBlockedError(XHSAPIError):
+    """HTTP 461 from edith — XHS soft-block flag on this caller. Trigger
+    backoff at the orchestrator level rather than retrying."""
 
 
 _AUTH_CODES = {-100, -101, 9999, 401}
@@ -203,7 +284,7 @@ class XHSClient:
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=2, max=10),
         retry=retry_if_exception(
-            lambda e: isinstance(e, XHSAPIError) and not isinstance(e, (XHSAuthError, XHSPermissionError))
+            lambda e: isinstance(e, XHSAPIError) and not isinstance(e, (XHSAuthError, XHSPermissionError, XHSBlockedError))
         ),
         reraise=True,
     )
@@ -213,6 +294,10 @@ class XHSClient:
         headers = {**_full_browser_headers(self.cookie_str), **sign_headers}
         url = f"{XHS_HOST}{uri}?{urlencode(params)}"
         resp = await self._client.get(url, headers=headers)
+        # 461 is XHS's "you've been flagged" status. Surface it as a typed
+        # error so the orchestrator can stop hammering instead of retrying.
+        if resp.status_code == 461:
+            raise XHSBlockedError("XHS returned 461 — caller is soft-blocked", code=461)
         resp.raise_for_status()
         data = resp.json()
         if data.get("success") is False:
@@ -223,7 +308,7 @@ class XHSClient:
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=2, max=10),
         retry=retry_if_exception(
-            lambda e: isinstance(e, XHSAPIError) and not isinstance(e, (XHSAuthError, XHSPermissionError))
+            lambda e: isinstance(e, XHSAPIError) and not isinstance(e, (XHSAuthError, XHSPermissionError, XHSBlockedError))
         ),
         reraise=True,
     )
@@ -233,6 +318,8 @@ class XHSClient:
         headers = {**_full_browser_headers(self.cookie_str), **sign_headers}
         url = f"{XHS_HOST}{uri}"
         resp = await self._client.post(url, headers=headers, json=payload)
+        if resp.status_code == 461:
+            raise XHSBlockedError("XHS returned 461 — caller is soft-blocked", code=461)
         resp.raise_for_status()
         data = resp.json()
         if data.get("success") is False:
@@ -316,45 +403,29 @@ async def _fetch_comments_with_replies(
     max_sub_per_comment: int = 5,
 ) -> List[Dict]:
     """
-    Fetch top-level comments for a note then, for any comment with sub-comments,
-    fetch up to `max_sub_per_comment` replies concurrently.
-    Returns a flat list with top-level entries followed by their replies inline.
+    Fetch top-level comments for a note, then sub-comments serially with
+    delays. Designed to look like a human reading: sleeps before opening
+    comments, between scrolls, and between expanding reply threads.
+
+    Re-raises XHSBlockedError so the orchestrator can flip a circuit breaker
+    instead of grinding through every remaining note.
     """
     async with _comment_semaphore:
+        # Simulate the user reading the post body before glancing at comments.
+        await _human_sleep("read_post")
+
         try:
             comment_data = await client.get_note_comments(note_id)
-        except XHSAuthError:
+        except (XHSAuthError, XHSBlockedError):
             raise
         except Exception:
             return []
 
         top_comments = comment_data.get("comments", [])[:max_comments]
-        await asyncio.sleep(random.uniform(0.5, 1.5))
 
-        # Build sub-comment fetch tasks for comments that have replies
-        sub_tasks = []
-        for c in top_comments:
-            sub_count = c.get("sub_comment_count", 0)
-            if sub_count and sub_count > 0:
-                cid = c.get("id", "")
-                if cid:
-                    sub_tasks.append((cid, client.get_note_sub_comments(
-                        note_id, cid, num=max_sub_per_comment
-                    )))
+        # Brief pause as the comments load and the eye scans them.
+        await _human_sleep("comments_load")
 
-        # Fetch all sub-comment pages concurrently
-        sub_results: Dict[str, List[Dict]] = {}
-        if sub_tasks:
-            cids = [t[0] for t in sub_tasks]
-            coros = [t[1] for t in sub_tasks]
-            gathered = await asyncio.gather(*coros, return_exceptions=True)
-            for cid, result in zip(cids, gathered):
-                if isinstance(result, Exception):
-                    sub_results[cid] = []
-                else:
-                    sub_results[cid] = result.get("comments", [])  # type: ignore[union-attr]
-
-        # Build flat comment list
         flat: List[Dict] = []
         for c in top_comments:
             flat.append({
@@ -363,8 +434,27 @@ async def _fetch_comments_with_replies(
                 "user": c.get("user_info", {}).get("nickname", ""),
                 "is_reply": False,
             })
+
+            sub_count = c.get("sub_comment_count", 0) or 0
             cid = c.get("id", "")
-            for sub in sub_results.get(cid, []):
+            if not cid or sub_count <= 0:
+                continue
+
+            # Tap to expand replies — humans take a beat before doing this.
+            await _human_sleep("reply_expand")
+
+            try:
+                sub_data = await client.get_note_sub_comments(
+                    note_id, cid, num=max_sub_per_comment
+                )
+            except XHSBlockedError:
+                # Stop expanding replies once XHS flips the flag, but keep
+                # the top-level comments we already have.
+                raise
+            except Exception:
+                sub_data = {"comments": []}
+
+            for sub in sub_data.get("comments", []):
                 flat.append({
                     "content": sub.get("content", ""),
                     "liked_count": sub.get("like_count", 0),
@@ -425,7 +515,12 @@ async def _scrape_keyword_http(
             items = filtered
             logger.info("After date filter (%s, cutoff=%d): %d items", date_range, cutoff, len(items))
 
-        for item in items[:max_notes]:
+        # Circuit breaker: once XHS flags the caller (461), stop fetching
+        # comments. We keep collecting notes (the search already returned
+        # them) so the analysis still has post metadata to chew on.
+        comments_blocked = False
+
+        for idx, item in enumerate(items[:max_notes]):
             note_id = item.get("id") or item.get("note_id", "")
             if not note_id:
                 continue
@@ -454,12 +549,24 @@ async def _scrape_keyword_http(
                 "comments": [],
             }
 
-            note["comments"] = await _fetch_comments_with_replies(
-                client, note_id, max_comments_per_note
-            )
+            if not comments_blocked:
+                try:
+                    note["comments"] = await _fetch_comments_with_replies(
+                        client, note_id, max_comments_per_note
+                    )
+                except XHSBlockedError:
+                    comments_blocked = True
+                    logger.warning(
+                        "XHS 461 on note %s — flipping comments circuit breaker, "
+                        "remaining %d notes will be metadata-only",
+                        note_id, max(0, len(items[:max_notes]) - idx - 1),
+                    )
 
             results.append(note)
-            await asyncio.sleep(random.uniform(0.5, 1.5))
+
+            # Pacing between notes — driven by XHS_PACE_PROFILE.
+            if idx < len(items[:max_notes]) - 1:
+                await _human_sleep("between_notes")
 
     finally:
         await client.close()
