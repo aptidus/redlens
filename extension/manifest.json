@@ -1,15 +1,14 @@
 {
   "manifest_version": 3,
   "name": "NicheLens Cookie Connect",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Connect your xiaohongshu.com / douyin.com session to NicheLens. A floating button appears on each site, and authenticated API calls run inside your browser to bypass server-IP blocks.",
   "permissions": ["cookies", "storage", "scripting", "tabs"],
   "host_permissions": [
     "https://*.xiaohongshu.com/*",
     "https://*.douyin.com/*",
     "https://nichelens.ai/*",
-    "https://*.nichelens.ai/*",
-    "http://localhost/*"
+    "https://*.nichelens.ai/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -27,8 +26,7 @@
     {
       "matches": [
         "https://nichelens.ai/*",
-        "https://*.nichelens.ai/*",
-        "http://localhost/*"
+        "https://*.nichelens.ai/*"
       ],
       "js": ["bridge.js"],
       "run_at": "document_start"
